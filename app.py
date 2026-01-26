@@ -6,7 +6,6 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import random
 from datetime import datetime, timedelta
-from collections import deque
 import numpy as np
 import pytz
 import requests
@@ -41,6 +40,12 @@ COOLDOWN_AFTER_LOSS = 600     # 10 minutes cooldown after loss (seconds)
 MIN_RVOL = 1.5                # Minimum relative volume
 MIN_HOLD_CHECKS = 3           # Must hold level for 3 checks (15 sec)
 MIN_SETUP_SCORE = 70          # HOT score minimum for trade
+
+# PROFESSIONAL PROFIT MANAGEMENT
+PARTIAL_PROFIT_1 = 0.15       # Take 50% profit at +15%
+PARTIAL_PROFIT_2 = 0.25       # Take 25% more at +25%
+TRAIL_AFTER_PARTIAL = True    # Trail stop after first partial
+MOVE_STOP_TO_BE = 0.10        # Move stop to breakeven after +10%
 
 # =============================================================================
 # NEWS KEYWORDS
@@ -196,6 +201,16 @@ defs = {
     'candle_history': {},             # Store candle data
     'opening_range': {},              # 5min/15min opening range
     'or_calculated': False,           # Opening range calculated flag
+    # SETUP PERFORMANCE TRACKING
+    'setup_stats': {
+        'ORB': {'wins': 0, 'losses': 0, 'total_pnl': 0},
+        'VWAP_RECLAIM': {'wins': 0, 'losses': 0, 'total_pnl': 0},
+        'VWAP_REJECT': {'wins': 0, 'losses': 0, 'total_pnl': 0},
+        'PULLBACK': {'wins': 0, 'losses': 0, 'total_pnl': 0},
+        'BREAK_RETEST': {'wins': 0, 'losses': 0, 'total_pnl': 0},
+    },
+    # SHARE CARD DATA
+    'last_win_trade': None,           # Store last winning trade for share card
 }
 
 for k, v in defs.items():
@@ -886,6 +901,133 @@ def scan():
     return sorted(results, key=lambda x: x['hot_score'], reverse=True)
 
 # =============================================================================
+# SHARE CARD GENERATOR
+# =============================================================================
+def generate_share_card(trade):
+    """Generate a shareable trade card with mini chart"""
+    if not trade:
+        return None
+    
+    # Create SVG mini chart
+    prices = trade.get('price_history', [])
+    if len(prices) < 2:
+        prices = [trade['entry'], trade['exit']]
+    
+    # Normalize prices for SVG
+    min_p = min(prices) * 0.995
+    max_p = max(prices) * 1.005
+    price_range = max_p - min_p if max_p != min_p else 1
+    
+    # SVG dimensions
+    width = 280
+    height = 80
+    padding = 10
+    
+    # Create path
+    points = []
+    for i, p in enumerate(prices):
+        x = padding + (i / (len(prices) - 1)) * (width - 2 * padding) if len(prices) > 1 else width / 2
+        y = height - padding - ((p - min_p) / price_range) * (height - 2 * padding)
+        points.append(f"{x},{y}")
+    
+    path = " ".join(points)
+    
+    # Color based on win/loss
+    color = "#00FFA3" if trade['pnl'] >= 0 else "#FF4B4B"
+    
+    # Entry and exit points
+    entry_y = height - padding - ((trade['entry'] - min_p) / price_range) * (height - 2 * padding)
+    exit_y = height - padding - ((trade['exit'] - min_p) / price_range) * (height - 2 * padding)
+    
+    svg_chart = f'''
+    <svg width="{width}" height="{height}" style="background:rgba(0,0,0,0.3);border-radius:8px;">
+        <polyline points="{path}" fill="none" stroke="{color}" stroke-width="2"/>
+        <circle cx="{padding}" cy="{entry_y}" r="4" fill="#FFD700"/>
+        <circle cx="{width - padding}" cy="{exit_y}" r="4" fill="{color}"/>
+        <text x="{padding + 8}" y="{entry_y + 4}" fill="#FFD700" font-size="10">IN</text>
+        <text x="{width - padding - 20}" y="{exit_y + 4}" fill="{color}" font-size="10">OUT</text>
+    </svg>
+    '''
+    
+    # Build share card HTML
+    pnl_color = "#00FFA3" if trade['pnl'] >= 0 else "#FF4B4B"
+    pnl_sign = "+" if trade['pnl'] >= 0 else ""
+    
+    card_html = f'''
+    <div style="background:linear-gradient(145deg,#0d1117,#161b22);border:2px solid {color};border-radius:16px;padding:20px;max-width:320px;margin:10px auto;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+            <span style="font-size:1.5em;">🌱</span>
+            <span style="font-size:1.2em;font-weight:800;background:linear-gradient(135deg,#00FFA3,#00E5FF);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">PROJECT HOPE</span>
+        </div>
+        
+        <div style="background:rgba(255,255,255,0.05);border-radius:10px;padding:12px;margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div>
+                    <h3 style="color:white;margin:0;font-size:1.3em;">{trade['sym']}</h3>
+                    <span style="color:#00E5FF;font-size:0.8em;background:rgba(0,229,255,0.2);padding:2px 8px;border-radius:4px;">{trade['setup']}</span>
+                </div>
+                <div style="text-align:right;">
+                    <span style="color:{pnl_color};font-size:1.8em;font-weight:900;">{pnl_sign}${trade['pnl']:.2f}</span>
+                    <p style="color:{pnl_color};margin:0;font-size:0.9em;">{pnl_sign}{trade['pnl_pct']}%</p>
+                </div>
+            </div>
+        </div>
+        
+        {svg_chart}
+        
+        <div style="display:flex;justify-content:space-between;margin-top:12px;font-size:0.85em;">
+            <div>
+                <p style="color:#808495;margin:0;">Entry</p>
+                <p style="color:white;margin:0;font-weight:600;">${trade['entry']:.2f}</p>
+            </div>
+            <div style="text-align:center;">
+                <p style="color:#808495;margin:0;">Hold</p>
+                <p style="color:white;margin:0;font-weight:600;">{trade['hold_time']}s</p>
+            </div>
+            <div style="text-align:right;">
+                <p style="color:#808495;margin:0;">Exit</p>
+                <p style="color:white;margin:0;font-weight:600;">${trade['exit']:.2f}</p>
+            </div>
+        </div>
+        
+        <div style="border-top:1px solid rgba(255,255,255,0.1);margin-top:12px;padding-top:12px;text-align:center;">
+            <p style="color:#00FFA3;margin:0;font-size:0.8em;">🛡️ Protected by 5-Layer System</p>
+            <p style="color:#808495;margin:4px 0 0;font-size:0.75em;">{trade['date']} {trade['time']}</p>
+        </div>
+    </div>
+    '''
+    
+    return card_html
+
+def get_setup_stats_display():
+    """Generate setup performance stats display"""
+    stats = st.session_state.setup_stats
+    
+    html = '<div style="background:rgba(255,255,255,0.03);border-radius:12px;padding:15px;margin:10px 0;">'
+    html += '<h4 style="color:white;margin:0 0 12px;">📊 Setup Performance</h4>'
+    
+    for setup, data in stats.items():
+        total = data['wins'] + data['losses']
+        if total == 0:
+            continue
+        
+        win_rate = (data['wins'] / total * 100) if total > 0 else 0
+        color = "#00FFA3" if data['total_pnl'] >= 0 else "#FF4B4B"
+        
+        html += f'''
+        <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
+            <span style="color:#00E5FF;font-weight:600;">{setup}</span>
+            <span style="color:{color};">{win_rate:.0f}% ({data['wins']}W/{data['losses']}L) ${data['total_pnl']:+.2f}</span>
+        </div>
+        '''
+    
+    if all(s['wins'] + s['losses'] == 0 for s in stats.values()):
+        html += '<p style="color:#808495;margin:0;text-align:center;">No trades yet</p>'
+    
+    html += '</div>'
+    return html
+
+# =============================================================================
 # TRADING FUNCTIONS
 # =============================================================================
 def tick(action, sym, direction):
@@ -973,26 +1115,80 @@ def buy(stk, direction):
         'cur': stk['oc'],
         'sl': stk['sl'],
         'tp': stk['tp'],
+        'original_sl': stk['sl'],          # Keep original for reference
         'pnl': 0,
         'ticks': 0,
-        'entry_time': datetime.now()
+        'entry_time': datetime.now(),
+        # PARTIAL PROFIT TRACKING
+        'qty': 100,                         # Start with 100% (represented as 100)
+        'partial_1_taken': False,           # 50% at +15%
+        'partial_2_taken': False,           # 25% at +25%
+        'stop_at_breakeven': False,         # Flag for trailing
+        'realized_pnl': 0,                  # Track realized from partials
+        'price_history': [stk['oc']],       # For share card chart
     })
     
     tick('BUY', stk['sym'], direction)
     return True, "OK"
 
-def sell(i):
-    """Execute sell"""
+def sell(i, partial_pct=None):
+    """Execute sell - supports partial sells"""
     if i >= len(st.session_state.pos):
         return
     
     p = st.session_state.pos[i]
-    st.session_state.bal += (p['entry'] * 100) + p['pnl']
-    st.session_state.daily += p['pnl']
-    st.session_state.total += p['pnl']
     
-    if p['pnl'] >= 0:
+    # Determine quantity to sell
+    if partial_pct is None:
+        # Full close - sell remaining qty
+        sell_qty = p.get('qty', 100)
+    else:
+        sell_qty = partial_pct
+    
+    # Calculate P/L for this sale
+    pnl_this_sale = (p['cur'] - p['entry']) * sell_qty
+    
+    # Add to balance (return cost basis + P/L)
+    st.session_state.bal += (p['entry'] * sell_qty) + pnl_this_sale
+    
+    if partial_pct is not None and p.get('qty', 100) > sell_qty:
+        # Partial sale - update position but don't remove
+        p['qty'] = p.get('qty', 100) - sell_qty
+        p['realized_pnl'] = p.get('realized_pnl', 0) + pnl_this_sale
+        tick('PARTIAL', p['sym'], f"{sell_qty}%")
+        return  # Don't remove position yet
+    
+    # Full close (either explicit or qty depleted)
+    total_pnl = p.get('realized_pnl', 0) + pnl_this_sale
+    
+    st.session_state.daily += total_pnl
+    st.session_state.total += total_pnl
+    
+    # Track setup stats
+    setup_type = p.get('setup', 'MANUAL')
+    if setup_type in st.session_state.setup_stats:
+        if total_pnl >= 0:
+            st.session_state.setup_stats[setup_type]['wins'] += 1
+        else:
+            st.session_state.setup_stats[setup_type]['losses'] += 1
+        st.session_state.setup_stats[setup_type]['total_pnl'] += total_pnl
+    
+    if total_pnl >= 0:
         st.session_state.wins += 1
+        # Store winning trade for share card
+        st.session_state.last_win_trade = {
+            'sym': p['sym'],
+            'setup': setup_type,
+            'dir': p['dir'],
+            'entry': p['entry'],
+            'exit': p['cur'],
+            'pnl': total_pnl,
+            'pnl_pct': round((p['cur'] - p['entry']) / p['entry'] * 100, 1),
+            'time': datetime.now().strftime('%H:%M:%S'),
+            'date': datetime.now().strftime('%Y-%m-%d'),
+            'hold_time': p['ticks'] * 5,  # seconds
+            'price_history': p.get('price_history', []),
+        }
     else:
         st.session_state.losses += 1
         st.session_state.last_loss_time = datetime.now()  # Start cooldown
@@ -1000,35 +1196,75 @@ def sell(i):
     st.session_state.trades.append({
         'sym': p['sym'],
         'dir': p['dir'],
-        'setup': p.get('setup', 'N/A'),
-        'pnl': p['pnl'],
+        'setup': setup_type,
+        'pnl': total_pnl,
         't': datetime.now().strftime('%H:%M:%S'),
-        'd': datetime.now().strftime('%Y-%m-%d')
+        'd': datetime.now().strftime('%Y-%m-%d'),
+        'entry': p['entry'],
+        'exit': p['cur'],
     })
     
     tick('SELL', p['sym'], p['dir'])
     st.session_state.pos.pop(i)
 
 def update():
-    """Update positions with realistic price movement"""
+    """Update positions with realistic price movement + professional profit management"""
     for i, p in enumerate(st.session_state.pos):
         p['ticks'] += 1
         
-        # Realistic movement: small changes accumulating
-        change = random.gauss(0.002, 0.012)
-        change = max(-0.02, min(0.025, change))
+        # Realistic movement: small changes that ACCUMULATE from current price
+        change = random.gauss(0.001, 0.008)  # Smaller per-tick change
+        change = max(-0.015, min(0.018, change))  # Cap the change
         
-        p['cur'] = round(p['entry'] * (1 + change), 2)
-        p['pnl'] = round((p['cur'] - p['entry']) * 100, 2)
+        # Apply change to CURRENT price (not entry) - this makes it accumulate
+        p['cur'] = round(p['cur'] * (1 + change), 2)
+        p['pnl'] = round((p['cur'] - p['entry']) * p.get('qty', 100), 2)
         
-        # Auto-exit if autopilot ON or STARTER tier
+        # Track price history for chart
+        if 'price_history' in p:
+            p['price_history'].append(p['cur'])
+            if len(p['price_history']) > 50:
+                p['price_history'].pop(0)
+        
+        # Calculate current gain %
+        gain_pct = (p['cur'] - p['entry']) / p['entry']
+        
+        # Auto-management if autopilot ON or STARTER tier
         if st.session_state.auto or st.session_state.tier == 1:
-            if p['cur'] <= p['sl']:
+            
+            # STOP LOSS CHECK (always first)
+            effective_stop = p['entry'] if p.get('stop_at_breakeven') else p['sl']
+            if p['cur'] <= effective_stop:
                 sell(i)
                 return
+            
+            # TAKE PROFIT CHECK (final target)
             if p['cur'] >= p['tp']:
                 sell(i)
                 return
+            
+            # PARTIAL PROFIT 1: Take 50% at +15%
+            if gain_pct >= PARTIAL_PROFIT_1 and not p.get('partial_1_taken') and p.get('qty', 100) >= 50:
+                sell(i, partial_pct=50)
+                p['partial_1_taken'] = True
+                p['qty'] = 50
+                # Move stop to breakeven
+                if TRAIL_AFTER_PARTIAL:
+                    p['stop_at_breakeven'] = True
+                    p['sl'] = p['entry']  # Breakeven
+                return
+            
+            # PARTIAL PROFIT 2: Take 25% at +25%
+            if gain_pct >= PARTIAL_PROFIT_2 and not p.get('partial_2_taken') and p.get('qty', 100) >= 25:
+                sell(i, partial_pct=25)
+                p['partial_2_taken'] = True
+                p['qty'] = 25
+                return
+            
+            # MOVE STOP TO BREAKEVEN at +10% (if not already)
+            if gain_pct >= MOVE_STOP_TO_BE and not p.get('stop_at_breakeven'):
+                p['stop_at_breakeven'] = True
+                p['sl'] = p['entry']
 
 def auto_trade(stks):
     """Automatically enter trades when CONFIRMED signals hit"""
@@ -1270,7 +1506,7 @@ def trade():
                 st.rerun()
     
     # Protection shield
-    st.markdown(f'<div class="shld"><p style="font-weight:800;color:#00FFA3;margin:0;font-size:1em;">🛡️ PROFESSIONAL PROTECTION</p><p style="color:#808495;margin:4px 0 0;font-size:0.8em;">Confirmed Entries | Stop -25% | Profit +30% | Max {tier["trades"]} | Cooldown 10m</p></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="shld"><p style="font-weight:800;color:#00FFA3;margin:0;font-size:1em;">🛡️ PROFESSIONAL PROTECTION</p><p style="color:#808495;margin:4px 0 0;font-size:0.8em;">Partials @ +15%/+25% | Trail Stop | BE @ +10% | Max {tier["trades"]} | Cooldown 10m</p></div>', unsafe_allow_html=True)
     
     # Main content
     col1, col2 = st.columns([2, 1])
@@ -1350,15 +1586,25 @@ def trade():
         if st.session_state.pos:
             for i, p in enumerate(st.session_state.pos):
                 pc = "#00FFA3" if p['pnl'] >= 0 else "#FF4B4B"
+                
+                # Position status indicators
+                qty = p.get('qty', 100)
+                p1 = "✅" if p.get('partial_1_taken') else "⬜"
+                p2 = "✅" if p.get('partial_2_taken') else "⬜"
+                be_status = "🔒BE" if p.get('stop_at_breakeven') else ""
+                
                 st.markdown(f'''<div class="pcard" style="border-left:3px solid {pc};">
                     <div style="display:flex;justify-content:space-between;">
                         <div>
-                            <h4 style="color:white;margin:0;font-size:0.95em;">{p["sym"]}</h4>
+                            <h4 style="color:white;margin:0;font-size:0.95em;">{p["sym"]} <span style="color:#808495;font-size:0.7em;">{qty}%</span></h4>
                             <p style="color:#808495;font-size:0.75em;">{p["dir"]} | {p.get("setup", "N/A")}</p>
                         </div>
                         <h4 style="color:{pc};margin:0;">${p["pnl"]:+.2f}</h4>
                     </div>
-                    <p style="color:#808495;font-size:0.7em;margin:5px 0 0;">SL: ${p["sl"]:.2f} | TP: ${p["tp"]:.2f}</p>
+                    <div style="display:flex;justify-content:space-between;margin-top:5px;">
+                        <span style="color:#808495;font-size:0.65em;">SL: ${p["sl"]:.2f} {be_status}</span>
+                        <span style="color:#808495;font-size:0.65em;">{p1}T1 {p2}T2</span>
+                    </div>
                 </div>''', unsafe_allow_html=True)
                 
                 if tier['auto'] != 'always' and not st.session_state.auto:
@@ -1407,15 +1653,28 @@ def history():
     with c4:
         st.markdown(f'<div class="card stat"><p class="v" style="color:#FF4B4B;">{st.session_state.losses}</p><p class="l">Losses</p></div>', unsafe_allow_html=True)
     
-    st.markdown("### Recent Trades")
+    # Setup Performance Stats
+    st.markdown(get_setup_stats_display(), unsafe_allow_html=True)
+    
+    # Share Card for Last Win
+    if st.session_state.last_win_trade:
+        st.markdown("### 🏆 Last Winning Trade")
+        share_card = generate_share_card(st.session_state.last_win_trade)
+        if share_card:
+            st.markdown(share_card, unsafe_allow_html=True)
+            st.markdown('<p style="text-align:center;color:#808495;font-size:0.85em;">📱 Screenshot this card to share on social media!</p>', unsafe_allow_html=True)
+    
+    st.markdown("### 📜 Recent Trades")
     if st.session_state.trades:
         for t in reversed(st.session_state.trades[-10:]):
             c = "#00FFA3" if t['pnl'] >= 0 else "#FF4B4B"
+            entry_exit = f"${t.get('entry', 0):.2f} → ${t.get('exit', 0):.2f}" if 'entry' in t else ""
             st.markdown(f'''<div class="card" style="border-left:3px solid {c};padding:12px;">
                 <div style="display:flex;justify-content:space-between;">
                     <div>
                         <p style="color:#808495;font-size:0.8em;margin:0;">{t.get("d", "")} {t["t"]}</p>
                         <h4 style="color:white;margin:6px 0 0;">{t["sym"]} {t.get("dir", "")} | {t.get("setup", "N/A")}</h4>
+                        <p style="color:#808495;font-size:0.75em;margin:4px 0 0;">{entry_exit}</p>
                     </div>
                     <h3 style="color:{c};margin:0;">${t["pnl"]:+.2f}</h3>
                 </div>
@@ -1436,6 +1695,14 @@ def history():
         st.session_state.locked = False
         st.session_state.last_loss_time = None
         st.session_state.setups_pending = {}
+        st.session_state.last_win_trade = None
+        st.session_state.setup_stats = {
+            'ORB': {'wins': 0, 'losses': 0, 'total_pnl': 0},
+            'VWAP_RECLAIM': {'wins': 0, 'losses': 0, 'total_pnl': 0},
+            'VWAP_REJECT': {'wins': 0, 'losses': 0, 'total_pnl': 0},
+            'PULLBACK': {'wins': 0, 'losses': 0, 'total_pnl': 0},
+            'BREAK_RETEST': {'wins': 0, 'losses': 0, 'total_pnl': 0},
+        }
         st.rerun()
 
 def learn():
