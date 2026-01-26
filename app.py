@@ -334,16 +334,9 @@ if st.session_state.date != datetime.now().strftime('%Y-%m-%d'):
     st.session_state.premarket_scanned = False
     st.session_state.premarket_movers = []
 
-# Run premarket scan once per day (between 8:00 AM - 9:29 AM ET - peak premarket)
-now_et = datetime.now(pytz.timezone('US/Eastern'))
-is_premarket = (now_et.hour == 8) or (now_et.hour == 9 and now_et.minute < 30)
-if not st.session_state.premarket_scanned and is_premarket:
-    try:
-        movers = get_premarket_movers()
-        st.session_state.premarket_movers = movers
-        st.session_state.premarket_scanned = True
-    except:
-        pass
+# Premarket scanner DISABLED for now - was causing slowdown
+# Will re-enable after presentation
+st.session_state.premarket_scanned = True
 
 # Get Alpaca account
 acct = get_acct()
@@ -1090,18 +1083,15 @@ def analyze_stock(stk):
     }
 
 def scan():
-    """Scan all stocks and sort by HOT score - includes premarket movers"""
-    # Get active watchlist (core + premarket movers)
-    watchlist = get_active_watchlist()
+    """Scan stocks and sort by HOT score"""
+    # Limit to 15 stocks for speed
+    watchlist = STOCKS_CORE[:15]
     
     # Analyze each stock
     results = []
     for s in watchlist:
         try:
             result = analyze_stock(s)
-            # Add premarket gap info if available
-            if s.get('gap'):
-                result['premarket_gap'] = s['gap']
             results.append(result)
         except:
             continue
