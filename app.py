@@ -24,7 +24,7 @@ STOP_LOSS = 0.25
 TAKE_PROFIT = 0.30
 DAILY_LIMIT = 0.15
 MAX_POS = 0.05
-MIN_SCORE = 4
+MIN_SCORE = 3
 
 RED = ['bankruptcy','fraud','sec investigation','lawsuit','downgrade','misses estimates','ceo resigns','delisting','layoffs','fda rejection','criminal']
 GREEN = ['beats estimates','upgrade','fda approval','partnership','acquisition','buyback','record revenue','breakthrough','contract win']
@@ -45,20 +45,20 @@ def get_acct():
     except: pass
     return None
 
-def get_price(s):
+def get_price(sym):
     try:
-        r = requests.get(f"{DATA_URL}/v2/stocks/{s}/quotes/latest", headers=headers(), timeout=3)
+        r = requests.get(f"{DATA_URL}/v2/stocks/{sym}/quotes/latest", headers=headers(), timeout=3)
         if r.status_code == 200:
             d = r.json()
             if 'quote' in d: return float(d['quote'].get('ap',0) or d['quote'].get('bp',0))
     except: pass
     return None
 
-def get_news(s):
+def get_news(sym):
     try:
         end = datetime.now()
         start = end - timedelta(days=1)
-        r = requests.get(f"{DATA_URL}/v1beta1/news", headers=headers(), params={'symbols':s,'start':start.strftime('%Y-%m-%dT%H:%M:%SZ'),'end':end.strftime('%Y-%m-%dT%H:%M:%SZ'),'limit':10}, timeout=5)
+        r = requests.get(f"{DATA_URL}/v1beta1/news", headers=headers(), params={'symbols':sym,'start':start.strftime('%Y-%m-%dT%H:%M:%SZ'),'end':end.strftime('%Y-%m-%dT%H:%M:%SZ'),'limit':10}, timeout=5)
         if r.status_code == 200: return r.json().get('news',[])
     except: pass
     return []
@@ -147,14 +147,14 @@ def hit_limit():
     return st.session_state.locked
 
 def gen(stk):
-    s,b = stk['s'],stk['p']
-    real = get_price(s)
+    sym,b = stk['s'],stk['p']
+    real = get_price(sym)
     if real and real > 0: b = real
-    if s not in st.session_state.data:
+    if sym not in st.session_state.data:
         p = [b]
         for _ in range(99): p.append(round(max(b*0.8,min(b*1.2,p[-1]+random.gauss(0,b*0.01))),2))
-        st.session_state.data[s] = {'p':p,'v':[random.randint(1000000,10000000) for _ in range(100)]}
-    d = st.session_state.data[s]
+        st.session_state.data[sym] = {'p':p,'v':[random.randint(1000000,10000000) for _ in range(100)]}
+    d = st.session_state.data[sym]
     p = d['p']
     new = real if real and real > 0 else round(max(b*0.7,min(b*1.3,p[-1]+random.gauss(0,b*0.005))),2)
     p.append(new)
@@ -176,10 +176,10 @@ def ema(p,n):
     for x in p[n:]: e = (x*m)+(e*(1-m))
     return round(e,4)
 
-def cnews(s):
-    k = f"{s}_{datetime.now().strftime('%Y%m%d%H')}"
+def cnews(sym):
+    k = f"{sym}_{datetime.now().strftime('%Y%m%d%H')}"
     if k in st.session_state.nc: return st.session_state.nc[k]
-    n = check_news(get_news(s))
+    n = check_news(get_news(sym))
     st.session_state.nc[k] = n
     return n
 
@@ -228,8 +228,8 @@ def analyze(stk):
 def scan():
     return sorted([analyze(s) for s in STOCKS], key=lambda x:abs(x['sc']), reverse=True)
 
-def tick(a,s,d):
-    st.session_state.ticker.append({'t':datetime.now().strftime('%H:%M:%S'),'a':a,'s':s,'d':d})
+def tick(a,sym,d):
+    st.session_state.ticker.append({'t':datetime.now().strftime('%H:%M:%S'),'a':a,'s':sym,'d':d})
     if len(st.session_state.ticker)>15: st.session_state.ticker.pop(0)
 
 def can_buy(stk):
@@ -277,12 +277,12 @@ def auto_trade(stks):
     tier = TIERS[st.session_state.tier]
     _,_,_,op = mkt()
     if not op or hit_limit() or len(st.session_state.pos)>=tier['trades']: return
-    for s in stks[:tier['stocks']]:
+    for stk in stks[:tier['stocks']]:
         if len(st.session_state.pos)>=tier['trades']: break
-        if s['sig'] in ['STRONG BUY','BUY']:
-            if buy(s,'CALL'): st.balloons(); break
-        elif s['sig'] in ['STRONG SELL','SELL']:
-            if buy(s,'PUT'): st.balloons(); break
+        if stk['sig'] in ['STRONG BUY','BUY']:
+            if buy(stk,'CALL'): st.balloons(); break
+        elif stk['sig'] in ['STRONG SELL','SELL']:
+            if buy(stk,'PUT'): st.balloons(); break
 
 def home():
     st.markdown('<div class="logo"><span>🌱</span><span>PROJECT HOPE</span></div>', unsafe_allow_html=True)
@@ -298,8 +298,8 @@ def home():
     with c4:
         if st.button("Learn",use_container_width=True,key="h3"): st.session_state.page='learn'; st.rerun()
     if acct: st.markdown(f'<div class="conn"><span style="color:#00FFA3;font-weight:700;">✓ ALPACA</span> | <span style="color:#FFD700;font-weight:700;">${st.session_state.bal:,.2f}</span></div>', unsafe_allow_html=True)
-    st,ct,cd,_ = mkt()
-    st.markdown(f'<div class="clk {st}"><p style="color:#808495;margin:0;font-size:0.85em;">{ct}</p><p style="font-size:1.3em;font-weight:800;color:#00E5FF;margin:6px 0 0;font-family:monospace;">{cd}</p></div>', unsafe_allow_html=True)
+    status,ct,cd,_ = mkt()
+    st.markdown(f'<div class="clk {status}"><p style="color:#808495;margin:0;font-size:0.85em;">{ct}</p><p style="font-size:1.3em;font-weight:800;color:#00E5FF;margin:6px 0 0;font-family:monospace;">{cd}</p></div>', unsafe_allow_html=True)
     st.markdown("### 🛡️ 5-Layer Protection")
     c1,c2,c3,c4,c5 = st.columns(5)
     with c1: st.markdown('<div class="card stat"><p class="v" style="color:#00FFA3;">-25%</p><p class="l">Stop</p></div>', unsafe_allow_html=True)
@@ -339,8 +339,8 @@ def trade():
     c1,c2 = st.columns([2,1])
     with c1: st.markdown(f'<div style="display:flex;align-items:center;gap:8px;"><span style="font-size:1.3em;">🌱</span><span style="font-size:1.2em;font-weight:800;background:linear-gradient(135deg,#00FFA3,#00E5FF);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">PROJECT HOPE</span><span style="color:{tier["color"]};font-weight:600;background:rgba(255,255,255,0.1);padding:3px 8px;border-radius:6px;font-size:0.8em;">{tier["name"]}</span></div>', unsafe_allow_html=True)
     with c2:
-        s,_,cd,_ = mkt()
-        st.markdown(f'<div class="clk {s}" style="padding:6px;"><span style="font-size:0.8em;font-weight:600;">{cd}</span></div>', unsafe_allow_html=True)
+        status,_,cd,_ = mkt()
+        st.markdown(f'<div class="clk {status}" style="padding:6px;"><span style="font-size:0.8em;font-weight:600;">{cd}</span></div>', unsafe_allow_html=True)
     c1,c2,c3,c4 = st.columns(4)
     with c1:
         if st.button("Home",use_container_width=True,key="t1"): st.session_state.page='home'; st.rerun()
@@ -366,20 +366,20 @@ def trade():
     col1,col2 = st.columns([2,1])
     with col1:
         st.markdown(f"### 📊 Scanner ({tier['stocks']} stocks)")
-        for s in stks[:tier['stocks']]:
-            cc = 'blk' if s['blk'] else 'buy' if s['sc']>=MIN_SCORE else 'sell' if s['sc']<=-MIN_SCORE else 'wait'
-            chc = "#00FFA3" if s['chg']>=0 else "#FF4B4B"
-            sgc = "#FF0000" if s['blk'] else "#00FFA3" if s['sc']>=MIN_SCORE else "#FF4B4B" if s['sc']<=-MIN_SCORE else "#FFD700"
-            st.markdown(f'<div class="stk {cc}"><div style="display:flex;justify-content:space-between;"><div><h4 style="color:white;margin:0;font-size:1em;">{s["sym"]}</h4><p style="color:#808495;margin:2px 0 0;font-size:0.8em;">{s["name"]}</p></div><div style="text-align:right;"><h4 style="color:#00E5FF;margin:0;font-size:1em;">${s["pr"]:.2f}</h4><p style="color:{chc};margin:2px 0 0;font-weight:600;font-size:0.85em;">{s["chg"]:+.2f}</p></div></div><div style="display:flex;justify-content:space-between;margin-top:8px;"><span style="color:{sgc};font-weight:700;font-size:0.9em;">{s["sig"]} ({s["sc"]}/8)</span><span style="color:#808495;font-size:0.8em;">~${int(s["oc"])}</span></div></div>', unsafe_allow_html=True)
-            ih = "".join([f'<span class="ind {v[1]}">{k}</span>' for k,v in s['sigs'].items()])
+        for stk in stks[:tier['stocks']]:
+            cc = 'blk' if stk['blk'] else 'buy' if stk['sc']>=MIN_SCORE else 'sell' if stk['sc']<=-MIN_SCORE else 'wait'
+            chc = "#00FFA3" if stk['chg']>=0 else "#FF4B4B"
+            sgc = "#FF0000" if stk['blk'] else "#00FFA3" if stk['sc']>=MIN_SCORE else "#FF4B4B" if stk['sc']<=-MIN_SCORE else "#FFD700"
+            st.markdown(f'<div class="stk {cc}"><div style="display:flex;justify-content:space-between;"><div><h4 style="color:white;margin:0;font-size:1em;">{stk["sym"]}</h4><p style="color:#808495;margin:2px 0 0;font-size:0.8em;">{stk["name"]}</p></div><div style="text-align:right;"><h4 style="color:#00E5FF;margin:0;font-size:1em;">${stk["pr"]:.2f}</h4><p style="color:{chc};margin:2px 0 0;font-weight:600;font-size:0.85em;">{stk["chg"]:+.2f}</p></div></div><div style="display:flex;justify-content:space-between;margin-top:8px;"><span style="color:{sgc};font-weight:700;font-size:0.9em;">{stk["sig"]} ({stk["sc"]}/8)</span><span style="color:#808495;font-size:0.8em;">~${int(stk["oc"])}</span></div></div>', unsafe_allow_html=True)
+            ih = "".join([f'<span class="ind {v[1]}">{k}</span>' for k,v in stk['sigs'].items()])
             st.markdown(f'<div style="margin:-3px 0 5px;">{ih}</div>', unsafe_allow_html=True)
-            if s['news']['sent']=='DANGER': st.markdown(f'<div class="nb"><span style="color:#FF4B4B;">⚠️ {", ".join(s["news"]["red"][:2])}</span></div>', unsafe_allow_html=True)
-            elif s['news']['sent']=='CAUTION': st.markdown(f'<div class="nw"><span style="color:#FFA500;">⚡ {", ".join(s["news"]["red"][:1])}</span></div>', unsafe_allow_html=True)
-            elif s['news']['sent']=='BULLISH': st.markdown(f'<div class="ng"><span style="color:#00FFA3;">📈 {", ".join(s["news"]["green"][:2])}</span></div>', unsafe_allow_html=True)
-            if tier['auto']!='always' and not st.session_state.auto and s['sig'] in ['STRONG BUY','BUY','STRONG SELL','SELL'] and not s['blk'] and len(st.session_state.pos)<tier['trades'] and not hit_limit():
-                d = 'CALL' if s['sc']>0 else 'PUT'
-                if st.button(f"BUY {d} ${int(s['oc']*100)}",key=f"b_{s['sym']}",use_container_width=True):
-                    if buy(s,d): st.success("✓ Opened!"); st.balloons(); st.rerun()
+            if stk['news']['sent']=='DANGER': st.markdown(f'<div class="nb"><span style="color:#FF4B4B;">⚠️ {", ".join(stk["news"]["red"][:2])}</span></div>', unsafe_allow_html=True)
+            elif stk['news']['sent']=='CAUTION': st.markdown(f'<div class="nw"><span style="color:#FFA500;">⚡ {", ".join(stk["news"]["red"][:1])}</span></div>', unsafe_allow_html=True)
+            elif stk['news']['sent']=='BULLISH': st.markdown(f'<div class="ng"><span style="color:#00FFA3;">📈 {", ".join(stk["news"]["green"][:2])}</span></div>', unsafe_allow_html=True)
+            if tier['auto']!='always' and not st.session_state.auto and stk['sig'] in ['STRONG BUY','BUY','STRONG SELL','SELL'] and not stk['blk'] and len(st.session_state.pos)<tier['trades'] and not hit_limit():
+                d = 'CALL' if stk['sc']>0 else 'PUT'
+                if st.button(f"BUY {d} ${int(stk['oc']*100)}",key=f"b_{stk['sym']}",use_container_width=True):
+                    if buy(stk,d): st.success("✓ Opened!"); st.balloons(); st.rerun()
     with col2:
         st.markdown(f"### 📈 Positions ({len(st.session_state.pos)}/{tier['trades']})")
         if st.session_state.pos:
