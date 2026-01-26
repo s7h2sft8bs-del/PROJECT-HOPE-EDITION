@@ -661,7 +661,34 @@ def home():
                 st.session_state.page = 'trade'
                 st.rerun()
     
-    st.markdown(f'<div class="ft"><p style="color:#808495;font-size:0.85em;margin:0;">{NAME} | {EMAIL}</p><p style="color:#666;font-size:0.75em;margin:8px 0 0;">Not financial advice. Educational tool only. Trade responsibly.</p></div>', unsafe_allow_html=True)
+    # Footer
+    st.markdown(f'<div class="ft"><p style="color:#808495;font-size:0.85em;margin:0;">{NAME} | {EMAIL}</p><p style="color:#666;font-size:0.75em;margin:8px 0 0;">Educational tool only. Not financial advice.</p></div>', unsafe_allow_html=True)
+    
+    # Legal Disclaimer Dropdown
+    with st.expander("📜 Full Legal Disclaimer"):
+        st.markdown("""
+**IMPORTANT LEGAL DISCLAIMER**
+
+I am **NOT** a financial advisor. I am not a licensed broker, investment advisor, or financial planner. I am a regular person who built this app to help other regular people.
+
+**Project Hope is an EDUCATIONAL tool only.** Nothing in this app constitutes financial advice, investment advice, trading advice, or any other sort of advice. You should not treat any of the app's content as such.
+
+**RISK WARNING:** Options trading involves substantial risk of loss and is not suitable for all investors. Past performance is not indicative of future results. You could lose some or all of your investment.
+
+**KEY POINTS:**
+- Only trade with money you can afford to lose
+- Paper trading results do not guarantee real trading results
+- Always do your own research before making any trades
+- Consider consulting a licensed financial advisor
+
+**By using Project Hope, you acknowledge that:**
+1. You are solely responsible for your own trading decisions
+2. You understand the risks involved in options trading
+3. You will not hold Stephen Martinez or Project Hope liable for any losses
+4. This is educational software, not financial advice
+
+**Trade responsibly. Protect your capital. That's what Project Hope is all about.**
+        """)
 
 def trade():
     if st.session_state.tier == 0:
