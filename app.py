@@ -11,6 +11,8 @@ import pytz
 import requests
 
 st.set_page_config(page_title="Project Hope", page_icon="🌱", layout="wide", initial_sidebar_state="collapsed")
+
+# Auto-refresh with longer interval to reduce flicker
 st_autorefresh(interval=5000, key="refresh")
 
 # =============================================================================
@@ -356,8 +358,32 @@ if acct:
 # =============================================================================
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
-*{font-family:'Inter',sans-serif}.stApp{background:linear-gradient(160deg,#000,#0a0a0f 30%,#0d1117 60%,#000)}
+
+/* ANTI-FLICKER: Force dark background immediately */
+html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .stApp, .main, [data-testid="stHeader"] {
+    background-color: #000 !important;
+}
+
+/* Smooth transitions to prevent jarring updates */
+* {
+    transition: opacity 0.15s ease-in-out !important;
+}
+
+/* Hide Streamlit loading spinner flash */
+[data-testid="stStatusWidget"] {
+    display: none !important;
+}
+
+/* Main styles */
+*{font-family:'Inter',sans-serif}
+.stApp{background:linear-gradient(160deg,#000,#0a0a0f 30%,#0d1117 60%,#000) !important}
 #MainMenu,footer,header{visibility:hidden}
+
+/* Prevent white flash on iframe reload */
+iframe {
+    background-color: #000 !important;
+}
+
 .logo{display:flex;align-items:center;justify-content:center;gap:10px;padding:15px;flex-wrap:wrap}
 .logo span:first-child{font-size:2em}.logo span:last-child{font-size:1.8em;font-weight:900;background:linear-gradient(135deg,#00FFA3,#00E5FF,#FFD700);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .hero{text-align:center;padding:35px 20px;background:linear-gradient(145deg,rgba(0,255,163,0.08),rgba(0,229,255,0.05));border-radius:24px;margin:15px 0;border:1px solid rgba(255,255,255,0.1)}
