@@ -414,24 +414,44 @@ def mkt():
     t = now.strftime('%I:%M:%S %p ET')
     market_open = now.replace(hour=9, minute=30, second=0)
     market_close = now.replace(hour=16, minute=0, second=0)
+    power_hour_start = now.replace(hour=15, minute=0, second=0)
+    power_hour_end = now.replace(hour=15, minute=55, second=0)
+    morning_end = now.replace(hour=10, minute=30, second=0)
     
     if now.weekday() >= 5:
         return 'closed', t, "WEEKEND", False, False
     if now < market_open:
         d = market_open - now
-        return 'pre', t, f"PRE {d.seconds//3600:02d}:{(d.seconds%3600)//60:02d}:{d.seconds%60:02d}", False, False
+        return 'pre', t, f"OPENS {d.seconds//3600:02d}:{(d.seconds%3600)//60:02d}:{d.seconds%60:02d}", False, False
     if now >= market_close:
         return 'closed', t, "CLOSED", False, False
-    
-    # Market is open - check trading windows
-    d = market_close - now
-    countdown = f"OPEN {d.seconds//3600:02d}:{(d.seconds%3600)//60:02d}:{d.seconds%60:02d}"
     
     # TRADING WINDOWS: 9:30-10:30 and 3:00-3:55
     hour, minute = now.hour, now.minute
     opening_window = (hour == 9 and minute >= 30) or (hour == 10 and minute <= 30)
     power_hour = (hour == 15 and minute >= 0 and minute <= 55)
     in_trade_window = opening_window or power_hour
+    
+    # Create appropriate countdown message
+    if in_trade_window:
+        if opening_window:
+            d = morning_end - now
+            countdown = f"🟢 MORNING {d.seconds//60:02d}:{d.seconds%60:02d}"
+        else:
+            d = power_hour_end - now
+            countdown = f"🟢 POWER HR {d.seconds//60:02d}:{d.seconds%60:02d}"
+    else:
+        # In the dead zone (10:30 - 3:00) - show countdown to power hour
+        if now < power_hour_start:
+            d = power_hour_start - now
+            hrs = d.seconds // 3600
+            mins = (d.seconds % 3600) // 60
+            secs = d.seconds % 60
+            countdown = f"⏳ PWR HR in {hrs}:{mins:02d}:{secs:02d}"
+        else:
+            # After power hour but before close
+            d = market_close - now
+            countdown = f"CLOSES {d.seconds//60:02d}:{d.seconds%60:02d}"
     
     return 'open', t, countdown, True, in_trade_window
 
