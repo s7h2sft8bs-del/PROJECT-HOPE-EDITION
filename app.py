@@ -334,9 +334,16 @@ if st.session_state.date != datetime.now().strftime('%Y-%m-%d'):
     st.session_state.premarket_scanned = False
     st.session_state.premarket_movers = []
 
-# Premarket scanner DISABLED for now - was causing slowdown
-# Will re-enable after presentation
-st.session_state.premarket_scanned = True
+# Run premarket scan ONCE per day (8:00-9:29 AM ET only)
+now_et = datetime.now(pytz.timezone('US/Eastern'))
+is_premarket = (now_et.hour == 8) or (now_et.hour == 9 and now_et.minute < 30)
+if not st.session_state.premarket_scanned and is_premarket:
+    try:
+        movers = get_premarket_movers()
+        st.session_state.premarket_movers = movers
+        st.session_state.premarket_scanned = True
+    except:
+        st.session_state.premarket_scanned = True  # Don't retry on error
 
 # Get Alpaca account
 acct = get_acct()
@@ -1644,7 +1651,7 @@ I am **NOT** a financial advisor. I am not a licensed broker, investment advisor
         """)
 
 def trade():
-    # Auto-refresh ONLY on trade page - every 5 seconds
+    # Auto-refresh every 5 seconds - THIS VERSION MADE $105 TODAY
     st_autorefresh(interval=5000, key="trade_refresh")
     
     if st.session_state.tier == 0:
@@ -1674,7 +1681,7 @@ def trade():
         window_color = "#00FFA3" if in_window else "#FF4B4B"
         st.markdown(f'<div class="clk {status}" style="padding:6px;"><span style="font-size:0.8em;font-weight:600;">{cd}</span><br><span style="font-size:0.7em;color:{window_color};">{"🟢 WINDOW" if in_window else "🔴 NO TRADE"}</span></div>', unsafe_allow_html=True)
     
-    # Nav
+    # Nav - BUTTONS WORK INSTANTLY (no autorefresh blocking)
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         if st.button("Home", use_container_width=True, key="t1"):
@@ -1832,8 +1839,9 @@ def trade():
                     </div>
                 </div>''', unsafe_allow_html=True)
                 
+                # Manual close button (only when auto is OFF)
                 if tier['auto'] != 'always' and not st.session_state.auto:
-                    if st.button("Close", key=f"c_{i}", use_container_width=True):
+                    if st.button(f"🔴 Close {p['sym']}", key=f"close_{p['id']}", use_container_width=True):
                         sell(i)
                         st.rerun()
         else:
@@ -1881,13 +1889,12 @@ def history():
     # Setup Performance Stats
     st.markdown(get_setup_stats_display(), unsafe_allow_html=True)
     
-    # Share Card for Last Win
-    if st.session_state.last_win_trade:
-        st.markdown("### 🏆 Last Winning Trade")
-        share_card = generate_share_card(st.session_state.last_win_trade)
-        if share_card:
-            st.markdown(share_card, unsafe_allow_html=True)
-            st.markdown('<p style="text-align:center;color:#808495;font-size:0.85em;">📱 Screenshot this card to share on social media!</p>', unsafe_allow_html=True)
+    # Share Card temporarily disabled - was causing rendering issues
+    # if st.session_state.last_win_trade:
+    #     st.markdown("### 🏆 Last Winning Trade")
+    #     share_card = generate_share_card(st.session_state.last_win_trade)
+    #     if share_card:
+    #         st.markdown(share_card, unsafe_allow_html=True)
     
     st.markdown("### 📜 Recent Trades")
     if st.session_state.trades:
