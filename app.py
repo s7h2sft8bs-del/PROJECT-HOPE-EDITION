@@ -1,22 +1,21 @@
-# PROJECT HOPE v4.3 FINAL - BOSS OWNER EDITION
+# PROJECT HOPE v5.0 - PROFESSIONAL EDITION
 # Built by Stephen Martinez | Lancaster, PA
-# True Autopilot | News Scanner | 5-Layer Protection | Realistic Simulation
+# Institutional-Grade Entry Logic | 4 A+ Setups Only | No Impulse Trades
 
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import random
 from datetime import datetime, timedelta
+from collections import deque
 import numpy as np
 import pytz
 import requests
 
 st.set_page_config(page_title="Project Hope", page_icon="🌱", layout="wide", initial_sidebar_state="collapsed")
-
-# Refresh every 5 seconds - optimal for API limits and real-time feel
 st_autorefresh(interval=5000, key="refresh")
 
 # =============================================================================
-# ALPACA API - PAPER TRADING
+# ALPACA API
 # =============================================================================
 ALPACA_KEY = "PKQJEFSQBY2CFDYYHDR372QB3S"
 ALPACA_SECRET = "ArMPEE3fqY1JCB5CArZUQ5wY8fYQjuPXJ9qpnwYPHJuw"
@@ -32,22 +31,25 @@ LOCATION = "Lancaster, PA"
 EMAIL = "thetradingprotocol@gmail.com"
 
 # =============================================================================
-# PROTECTION SETTINGS - THE BULLETPROOF LAYER
+# PROFESSIONAL TRADING SETTINGS
 # =============================================================================
-STOP_LOSS = 0.25          # -25% stop loss
-TAKE_PROFIT = 0.30        # +30% take profit  
-DAILY_LIMIT = 0.15        # -15% daily max loss
-MAX_POS = 0.05            # 5% max per trade
-MIN_SCORE = 3             # Minimum score to trade (3 = more action)
+STOP_LOSS = 0.25              # -25% stop loss
+TAKE_PROFIT = 0.30            # +30% take profit  
+DAILY_LIMIT = 0.15            # -15% daily max loss
+MAX_POS = 0.05                # 5% max per trade
+COOLDOWN_AFTER_LOSS = 600     # 10 minutes cooldown after loss (seconds)
+MIN_RVOL = 1.5                # Minimum relative volume
+MIN_HOLD_CHECKS = 3           # Must hold level for 3 checks (15 sec)
+MIN_SETUP_SCORE = 70          # HOT score minimum for trade
 
 # =============================================================================
-# NEWS KEYWORDS - BLOCKS BAD, BOOSTS GOOD
+# NEWS KEYWORDS
 # =============================================================================
-RED = ['bankruptcy','fraud','sec investigation','lawsuit','downgrade','misses estimates','ceo resigns','delisting','layoffs','fda rejection','criminal','probe','investigation','default','recall']
-GREEN = ['beats estimates','upgrade','fda approval','partnership','acquisition','buyback','record revenue','breakthrough','contract win','price target raised','strong demand','expansion']
+RED = ['bankruptcy','fraud','sec investigation','lawsuit','downgrade','misses estimates','ceo resigns','delisting','layoffs','fda rejection','criminal','probe','investigation']
+GREEN = ['beats estimates','upgrade','fda approval','partnership','acquisition','buyback','record revenue','breakthrough','contract win','price target raised']
 
 # =============================================================================
-# TIER SYSTEM
+# TIER SYSTEM (UNCHANGED)
 # =============================================================================
 TIERS = {
     1: {"name": "STARTER", "stocks": 1, "trades": 1, "color": "#00FFA3", "auto": "always"},
@@ -57,7 +59,7 @@ TIERS = {
 }
 
 # =============================================================================
-# WATCHLIST - 15 HIGH VOLUME MOMENTUM STOCKS
+# WATCHLIST
 # =============================================================================
 STOCKS = [
     {"s": "SOFI", "n": "SoFi Technologies", "p": 14.50},
@@ -92,7 +94,7 @@ This isn't about getting rich quick. It's about building something real, one sma
 Welcome to Project Hope. Let's build together."""
 
 # =============================================================================
-# API FUNCTIONS
+# ALPACA API FUNCTIONS
 # =============================================================================
 def headers():
     return {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
@@ -117,17 +119,24 @@ def get_price(sym):
         pass
     return None
 
+def get_bars(sym, timeframe='1Min', limit=100):
+    """Get historical bars for candle analysis"""
+    try:
+        r = requests.get(f"{DATA_URL}/v2/stocks/{sym}/bars", headers=headers(), 
+                        params={'timeframe': timeframe, 'limit': limit}, timeout=5)
+        if r.status_code == 200:
+            return r.json().get('bars', [])
+    except:
+        pass
+    return []
+
 def get_news(sym):
     try:
         end = datetime.now()
         start = end - timedelta(days=1)
-        params = {
-            'symbols': sym,
-            'start': start.strftime('%Y-%m-%dT%H:%M:%SZ'),
-            'end': end.strftime('%Y-%m-%dT%H:%M:%SZ'),
-            'limit': 10
-        }
-        r = requests.get(f"{DATA_URL}/v1beta1/news", headers=headers(), params=params, timeout=5)
+        r = requests.get(f"{DATA_URL}/v1beta1/news", headers=headers(),
+                        params={'symbols': sym, 'start': start.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                               'end': end.strftime('%Y-%m-%dT%H:%M:%SZ'), 'limit': 10}, timeout=5)
         if r.status_code == 200:
             return r.json().get('news', [])
     except:
@@ -138,8 +147,8 @@ def check_news(news):
     if not news:
         return {'sent': 'NEUTRAL', 'red': [], 'green': [], 'block': False}
     red, green = [], []
-    for item in news:
-        txt = (item.get('headline', '') + ' ' + item.get('summary', '')).lower()
+    for i in news:
+        txt = (i.get('headline', '') + ' ' + i.get('summary', '')).lower()
         for w in RED:
             if w in txt and w not in red:
                 red.append(w)
@@ -178,7 +187,15 @@ defs = {
     'locked': False,
     'date': datetime.now().strftime('%Y-%m-%d'),
     'nc': {},
-    'pos_prices': {}  # Track position price history for realistic movement
+    # PROFESSIONAL ADDITIONS
+    'last_loss_time': None,           # For cooldown tracking
+    'market_regime': 'UNKNOWN',       # TREND or CHOP
+    'vwap_crosses': 0,                # Count VWAP crosses for regime
+    'setups_pending': {},             # Setups waiting for confirmation
+    'levels': {},                     # Pre-calculated levels per stock
+    'candle_history': {},             # Store candle data
+    'opening_range': {},              # 5min/15min opening range
+    'or_calculated': False,           # Opening range calculated flag
 }
 
 for k, v in defs.items():
@@ -190,6 +207,9 @@ if st.session_state.date != datetime.now().strftime('%Y-%m-%d'):
     st.session_state.daily = 0.0
     st.session_state.locked = False
     st.session_state.date = datetime.now().strftime('%Y-%m-%d')
+    st.session_state.or_calculated = False
+    st.session_state.opening_range = {}
+    st.session_state.vwap_crosses = 0
 
 # Get Alpaca account
 acct = get_acct()
@@ -203,311 +223,769 @@ if acct:
 # =============================================================================
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
-* {font-family: 'Inter', sans-serif;}
-.stApp {background: linear-gradient(160deg, #000, #0a0a0f 30%, #0d1117 60%, #000);}
-#MainMenu, footer, header {visibility: hidden;}
-.logo {display: flex; align-items: center; justify-content: center; gap: 10px; padding: 15px; flex-wrap: wrap;}
-.logo span:first-child {font-size: 2em;}
-.logo span:last-child {font-size: 1.8em; font-weight: 900; background: linear-gradient(135deg, #00FFA3, #00E5FF, #FFD700); -webkit-background-clip: text; -webkit-text-fill-color: transparent;}
-.hero {text-align: center; padding: 35px 20px; background: linear-gradient(145deg, rgba(0,255,163,0.08), rgba(0,229,255,0.05)); border-radius: 24px; margin: 15px 0; border: 1px solid rgba(255,255,255,0.1);}
-.hero h1 {font-size: 2.2em; font-weight: 900; background: linear-gradient(135deg, #00FFA3, #00E5FF, #FFD700); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0;}
-.hero .sub {font-size: 1.1em; font-weight: 700; color: #FFD700; margin: 12px 0 6px;}
-.hero .tag {font-size: 0.95em; color: #808495;}
-.card {background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; padding: 18px; margin: 8px 0;}
-.stat {text-align: center;}
-.stat .v {font-size: 1.6em; font-weight: 800; margin: 0;}
-.stat .l {font-size: 0.75em; color: #808495; margin-top: 5px; text-transform: uppercase;}
-.tier {background: rgba(255,255,255,0.02); border-radius: 22px; padding: 22px 14px; text-align: center; border: 1px solid rgba(255,255,255,0.08); min-height: 320px;}
-.tier h3 {margin: 0; font-size: 1.1em;}
-.tier .pr {font-size: 1.9em; font-weight: 900; color: white; margin: 10px 0;}
-.tier .f {font-size: 0.8em; margin: 4px 0;}
-.yes {color: #00FFA3;}
-.no {color: #FF4B4B;}
-.badge {background: linear-gradient(135deg, #FFD700, #FFA500); color: black; font-size: 0.6em; font-weight: 700; padding: 3px 8px; border-radius: 12px; display: inline-block; margin-bottom: 5px;}
-.clk {border-radius: 14px; padding: 10px; text-align: center; margin: 10px 0;}
-.clk.open {background: rgba(0,255,163,0.1); border: 2px solid rgba(0,255,163,0.4);}
-.clk.closed {background: rgba(255,75,75,0.1); border: 2px solid rgba(255,75,75,0.4);}
-.clk.pre {background: rgba(255,215,0,0.1); border: 2px solid rgba(255,215,0,0.4);}
-.conn {background: rgba(0,255,163,0.1); border: 2px solid rgba(0,255,163,0.4); border-radius: 10px; padding: 8px; text-align: center; margin: 8px 0;}
-.stk {background: rgba(255,255,255,0.03); border-radius: 14px; padding: 14px; margin: 8px 0; border: 1px solid rgba(255,255,255,0.08);}
-.stk.buy {border-left: 4px solid #00FFA3;}
-.stk.sell {border-left: 4px solid #FF4B4B;}
-.stk.wait {border-left: 4px solid #808495;}
-.stk.blk {border-left: 4px solid #FF0000; background: rgba(255,0,0,0.05);}
-.shld {background: rgba(0,255,163,0.1); border: 2px solid rgba(0,255,163,0.35); border-radius: 14px; padding: 14px; text-align: center; margin: 12px 0;}
-.nb {background: rgba(255,0,0,0.15); border: 1px solid rgba(255,0,0,0.4); border-radius: 6px; padding: 6px 10px; margin: 5px 0; font-size: 0.85em;}
-.nw {background: rgba(255,165,0,0.15); border: 1px solid rgba(255,165,0,0.4); border-radius: 6px; padding: 6px 10px; margin: 5px 0; font-size: 0.85em;}
-.ng {background: rgba(0,255,163,0.15); border: 1px solid rgba(0,255,163,0.4); border-radius: 6px; padding: 6px 10px; margin: 5px 0; font-size: 0.85em;}
-.ph {width: 80px; height: 80px; border-radius: 50%; border: 3px solid #00FFA3;}
-.ind {display: inline-block; padding: 3px 7px; border-radius: 5px; font-size: 0.7em; font-weight: 600; margin: 2px;}
-.ind.bu {background: rgba(0,255,163,0.2); color: #00FFA3;}
-.ind.be {background: rgba(255,75,75,0.2); color: #FF4B4B;}
-.ind.ne {background: rgba(255,215,0,0.2); color: #FFD700;}
-.aon {background: rgba(0,255,163,0.15); border: 2px solid rgba(0,255,163,0.5); border-radius: 12px; padding: 10px; text-align: center;}
-.aoff {background: rgba(255,255,255,0.03); border: 2px solid #808495; border-radius: 12px; padding: 10px; text-align: center;}
-.lck {background: rgba(255,0,0,0.2); border: 2px solid rgba(255,0,0,0.5); border-radius: 12px; padding: 10px; text-align: center;}
-.pcard {background: rgba(255,255,255,0.03); border-radius: 12px; padding: 10px; margin: 6px 0;}
-.tck {background: rgba(0,0,0,0.4); border-radius: 8px; padding: 6px; margin: 3px 0; font-family: monospace; font-size: 0.7em;}
-.tck.b {border-left: 3px solid #00FFA3;}
-.tck.s {border-left: 3px solid #FF4B4B;}
-.ft {background: rgba(0,0,0,0.4); padding: 18px; margin-top: 25px; text-align: center; border-radius: 18px 18px 0 0;}
-.stButton > button {background: linear-gradient(135deg, #00FFA3, #00CC7A); color: black; font-weight: 700; border: none; border-radius: 10px; padding: 8px 16px;}
+*{font-family:'Inter',sans-serif}.stApp{background:linear-gradient(160deg,#000,#0a0a0f 30%,#0d1117 60%,#000)}
+#MainMenu,footer,header{visibility:hidden}
+.logo{display:flex;align-items:center;justify-content:center;gap:10px;padding:15px;flex-wrap:wrap}
+.logo span:first-child{font-size:2em}.logo span:last-child{font-size:1.8em;font-weight:900;background:linear-gradient(135deg,#00FFA3,#00E5FF,#FFD700);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero{text-align:center;padding:35px 20px;background:linear-gradient(145deg,rgba(0,255,163,0.08),rgba(0,229,255,0.05));border-radius:24px;margin:15px 0;border:1px solid rgba(255,255,255,0.1)}
+.hero h1{font-size:2.2em;font-weight:900;background:linear-gradient(135deg,#00FFA3,#00E5FF,#FFD700);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin:0}
+.hero .sub{font-size:1.1em;font-weight:700;color:#FFD700;margin:12px 0 6px}.hero .tag{font-size:0.95em;color:#808495}
+.card{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:18px;padding:18px;margin:8px 0}
+.stat{text-align:center}.stat .v{font-size:1.6em;font-weight:800;margin:0}.stat .l{font-size:0.75em;color:#808495;margin-top:5px;text-transform:uppercase}
+.tier{background:rgba(255,255,255,0.02);border-radius:22px;padding:22px 14px;text-align:center;border:1px solid rgba(255,255,255,0.08);min-height:320px}
+.tier h3{margin:0;font-size:1.1em}.tier .pr{font-size:1.9em;font-weight:900;color:white;margin:10px 0}.tier .f{font-size:0.8em;margin:4px 0}
+.yes{color:#00FFA3}.no{color:#FF4B4B}
+.badge{background:linear-gradient(135deg,#FFD700,#FFA500);color:black;font-size:0.6em;font-weight:700;padding:3px 8px;border-radius:12px;display:inline-block;margin-bottom:5px}
+.clk{border-radius:14px;padding:10px;text-align:center;margin:10px 0}
+.clk.open{background:rgba(0,255,163,0.1);border:2px solid rgba(0,255,163,0.4)}
+.clk.closed{background:rgba(255,75,75,0.1);border:2px solid rgba(255,75,75,0.4)}
+.clk.pre{background:rgba(255,215,0,0.1);border:2px solid rgba(255,215,0,0.4)}
+.conn{background:rgba(0,255,163,0.1);border:2px solid rgba(0,255,163,0.4);border-radius:10px;padding:8px;text-align:center;margin:8px 0}
+.stk{background:rgba(255,255,255,0.03);border-radius:14px;padding:14px;margin:8px 0;border:1px solid rgba(255,255,255,0.08)}
+.stk.buy{border-left:4px solid #00FFA3}.stk.sell{border-left:4px solid #FF4B4B}.stk.wait{border-left:4px solid #808495}.stk.blk{border-left:4px solid #FF0000;background:rgba(255,0,0,0.05)}
+.stk.pending{border-left:4px solid #FFD700;background:rgba(255,215,0,0.05)}
+.shld{background:rgba(0,255,163,0.1);border:2px solid rgba(0,255,163,0.35);border-radius:14px;padding:14px;text-align:center;margin:12px 0}
+.regime-trend{background:rgba(0,255,163,0.1);border:1px solid rgba(0,255,163,0.4);border-radius:8px;padding:6px 12px;display:inline-block}
+.regime-chop{background:rgba(255,165,0,0.1);border:1px solid rgba(255,165,0,0.4);border-radius:8px;padding:6px 12px;display:inline-block}
+.setup-tag{background:rgba(0,229,255,0.2);border:1px solid rgba(0,229,255,0.4);border-radius:6px;padding:4px 8px;font-size:0.75em;font-weight:600;display:inline-block;margin:2px}
+.nb{background:rgba(255,0,0,0.15);border:1px solid rgba(255,0,0,0.4);border-radius:6px;padding:6px 10px;margin:5px 0;font-size:0.85em}
+.nw{background:rgba(255,165,0,0.15);border:1px solid rgba(255,165,0,0.4);border-radius:6px;padding:6px 10px;margin:5px 0;font-size:0.85em}
+.ng{background:rgba(0,255,163,0.15);border:1px solid rgba(0,255,163,0.4);border-radius:6px;padding:6px 10px;margin:5px 0;font-size:0.85em}
+.ph{width:80px;height:80px;border-radius:50%;border:3px solid #00FFA3}
+.ind{display:inline-block;padding:3px 7px;border-radius:5px;font-size:0.7em;font-weight:600;margin:2px}
+.ind.bu{background:rgba(0,255,163,0.2);color:#00FFA3}.ind.be{background:rgba(255,75,75,0.2);color:#FF4B4B}.ind.ne{background:rgba(255,215,0,0.2);color:#FFD700}
+.aon{background:rgba(0,255,163,0.15);border:2px solid rgba(0,255,163,0.5);border-radius:12px;padding:10px;text-align:center}
+.aoff{background:rgba(255,255,255,0.03);border:2px solid #808495;border-radius:12px;padding:10px;text-align:center}
+.lck{background:rgba(255,0,0,0.2);border:2px solid rgba(255,0,0,0.5);border-radius:12px;padding:10px;text-align:center}
+.cooldown{background:rgba(255,165,0,0.2);border:2px solid rgba(255,165,0,0.5);border-radius:12px;padding:10px;text-align:center}
+.pcard{background:rgba(255,255,255,0.03);border-radius:12px;padding:10px;margin:6px 0}
+.tck{background:rgba(0,0,0,0.4);border-radius:8px;padding:6px;margin:3px 0;font-family:monospace;font-size:0.7em}
+.tck.b{border-left:3px solid #00FFA3}.tck.s{border-left:3px solid #FF4B4B}
+.ft{background:rgba(0,0,0,0.4);padding:18px;margin-top:25px;text-align:center;border-radius:18px 18px 0 0}
+.stButton>button{background:linear-gradient(135deg,#00FFA3,#00CC7A);color:black;font-weight:700;border:none;border-radius:10px;padding:8px 16px}
 </style>""", unsafe_allow_html=True)
 
 # =============================================================================
-# CORE FUNCTIONS
+# MARKET TIME & TRADING WINDOWS
 # =============================================================================
+def get_et_now():
+    """Get current Eastern Time"""
+    return datetime.now(pytz.timezone('US/Eastern'))
+
 def mkt():
-    """Get market status"""
-    et = pytz.timezone('US/Eastern')
-    now = datetime.now(et)
+    """Market status with trading windows"""
+    now = get_et_now()
     t = now.strftime('%I:%M:%S %p ET')
-    o = now.replace(hour=9, minute=30, second=0)
-    c = now.replace(hour=16, minute=0, second=0)
+    market_open = now.replace(hour=9, minute=30, second=0)
+    market_close = now.replace(hour=16, minute=0, second=0)
+    
     if now.weekday() >= 5:
-        return 'closed', t, "WEEKEND", False
-    if now < o:
-        d = o - now
-        return 'pre', t, f"PRE {d.seconds//3600:02d}:{(d.seconds%3600)//60:02d}:{d.seconds%60:02d}", False
-    if now < c:
-        d = c - now
-        return 'open', t, f"OPEN {d.seconds//3600:02d}:{(d.seconds%3600)//60:02d}:{d.seconds%60:02d}", True
-    return 'closed', t, "CLOSED", False
+        return 'closed', t, "WEEKEND", False, False
+    if now < market_open:
+        d = market_open - now
+        return 'pre', t, f"PRE {d.seconds//3600:02d}:{(d.seconds%3600)//60:02d}:{d.seconds%60:02d}", False, False
+    if now >= market_close:
+        return 'closed', t, "CLOSED", False, False
+    
+    # Market is open - check trading windows
+    d = market_close - now
+    countdown = f"OPEN {d.seconds//3600:02d}:{(d.seconds%3600)//60:02d}:{d.seconds%60:02d}"
+    
+    # TRADING WINDOWS: 9:30-10:30 and 3:00-3:55
+    hour, minute = now.hour, now.minute
+    opening_window = (hour == 9 and minute >= 30) or (hour == 10 and minute <= 30)
+    power_hour = (hour == 15 and minute >= 0 and minute <= 55)
+    in_trade_window = opening_window or power_hour
+    
+    return 'open', t, countdown, True, in_trade_window
 
-def hit_limit():
-    """Check if daily loss limit reached"""
-    if st.session_state.daily <= -(st.session_state.start * DAILY_LIMIT):
-        st.session_state.locked = True
-    return st.session_state.locked
+def is_in_cooldown():
+    """Check if we're in cooldown after a loss"""
+    if st.session_state.last_loss_time is None:
+        return False, 0
+    elapsed = (datetime.now() - st.session_state.last_loss_time).total_seconds()
+    remaining = COOLDOWN_AFTER_LOSS - elapsed
+    if remaining > 0:
+        return True, int(remaining)
+    return False, 0
 
-def gen(stk):
-    """Generate stock data with real prices when available"""
-    sym, b = stk['s'], stk['p']
+# =============================================================================
+# KEY LEVELS CALCULATION
+# =============================================================================
+def calc_levels(sym, prices, volumes):
+    """Calculate key levels for a stock"""
+    if len(prices) < 20:
+        return {}
+    
+    # VWAP
+    vwap = sum(p * v for p, v in zip(prices[-20:], volumes[-20:])) / sum(volumes[-20:])
+    
+    # Support/Resistance (20-bar high/low)
+    support = min(prices[-20:])
+    resistance = max(prices[-20:])
+    
+    # Prior day levels (simulated - in real app would fetch)
+    pd_high = max(prices[-50:]) if len(prices) >= 50 else resistance
+    pd_low = min(prices[-50:]) if len(prices) >= 50 else support
+    pd_close = prices[-20] if len(prices) >= 20 else prices[-1]
+    
+    # Premarket levels (simulated)
+    pm_high = max(prices[-10:]) if len(prices) >= 10 else prices[-1] * 1.01
+    pm_low = min(prices[-10:]) if len(prices) >= 10 else prices[-1] * 0.99
+    
+    # Current price
+    current = prices[-1]
+    
+    # Whole/half dollar levels
+    whole = round(current)
+    half_up = whole + 0.5 if current < whole + 0.5 else whole + 1.0
+    half_down = whole - 0.5 if current > whole - 0.5 else whole - 1.0
+    
+    return {
+        'vwap': round(vwap, 2),
+        'support': round(support, 2),
+        'resistance': round(resistance, 2),
+        'pd_high': round(pd_high, 2),
+        'pd_low': round(pd_low, 2),
+        'pd_close': round(pd_close, 2),
+        'pm_high': round(pm_high, 2),
+        'pm_low': round(pm_low, 2),
+        'whole': whole,
+        'half_up': half_up,
+        'half_down': half_down
+    }
+
+def calc_opening_range(sym, prices):
+    """Calculate 5-min and 15-min opening range"""
+    now = get_et_now()
+    
+    # Only calculate after 9:35 and before 9:50
+    if now.hour == 9 and 35 <= now.minute <= 50 and not st.session_state.or_calculated:
+        if len(prices) >= 5:
+            or_5m_high = max(prices[-5:])
+            or_5m_low = min(prices[-5:])
+            
+            if sym not in st.session_state.opening_range:
+                st.session_state.opening_range[sym] = {}
+            
+            st.session_state.opening_range[sym]['5m_high'] = round(or_5m_high, 2)
+            st.session_state.opening_range[sym]['5m_low'] = round(or_5m_low, 2)
+            
+            if now.minute >= 45 and len(prices) >= 15:
+                st.session_state.opening_range[sym]['15m_high'] = round(max(prices[-15:]), 2)
+                st.session_state.opening_range[sym]['15m_low'] = round(min(prices[-15:]), 2)
+                st.session_state.or_calculated = True
+    
+    return st.session_state.opening_range.get(sym, {})
+
+# =============================================================================
+# TECHNICAL INDICATORS
+# =============================================================================
+def rsi(prices, n=14):
+    if len(prices) < n + 1:
+        return 50.0
+    deltas = np.diff(prices[-n-1:])
+    gains = np.where(deltas > 0, deltas, 0)
+    losses = np.where(deltas < 0, -deltas, 0)
+    avg_gain = np.mean(gains)
+    avg_loss = np.mean(losses)
+    if avg_loss == 0:
+        return 100.0
+    return round(100 - (100 / (1 + avg_gain / avg_loss)), 1)
+
+def ema(prices, n):
+    if len(prices) < n:
+        return prices[-1] if prices else 0
+    mult = 2 / (n + 1)
+    ema_val = np.mean(prices[:n])
+    for p in prices[n:]:
+        ema_val = (p * mult) + (ema_val * (1 - mult))
+    return round(ema_val, 4)
+
+def calc_rvol(volumes):
+    """Calculate relative volume"""
+    if len(volumes) < 20:
+        return 1.0
+    avg_vol = np.mean(volumes[-20:-1])
+    current_vol = volumes[-1]
+    if avg_vol == 0:
+        return 1.0
+    return round(current_vol / avg_vol, 2)
+
+def detect_regime(prices, vwap):
+    """Detect if market is TREND or CHOP"""
+    if len(prices) < 20:
+        return 'UNKNOWN'
+    
+    # Count VWAP crosses in last 20 bars
+    crosses = 0
+    for i in range(1, min(20, len(prices))):
+        prev_above = prices[-i-1] > vwap
+        curr_above = prices[-i] > vwap
+        if prev_above != curr_above:
+            crosses += 1
+    
+    st.session_state.vwap_crosses = crosses
+    
+    # Check for higher highs/higher lows (or opposite)
+    recent = prices[-10:]
+    higher_highs = all(recent[i] >= recent[i-1] * 0.998 for i in range(1, len(recent)))
+    lower_lows = all(recent[i] <= recent[i-1] * 1.002 for i in range(1, len(recent)))
+    
+    if crosses >= 4:
+        return 'CHOP'
+    elif crosses <= 2 and (higher_highs or lower_lows):
+        return 'TREND'
+    else:
+        return 'MIXED'
+
+# =============================================================================
+# A+ SETUP DETECTION (THE PROFESSIONAL EDGE)
+# =============================================================================
+def detect_setups(sym, price, prices, volumes, levels, or_levels, rvol, regime):
+    """
+    Detect which A+ setup is forming (if any)
+    Returns: setup_type, direction, entry, stop, confidence
+    """
+    setups = []
+    
+    if len(prices) < 20 or not levels:
+        return setups
+    
+    vwap = levels['vwap']
+    e9 = ema(prices, 9)
+    e21 = ema(prices, 21)
+    
+    # Get last few prices for pattern detection
+    p1, p2, p3 = prices[-1], prices[-2] if len(prices) > 1 else prices[-1], prices[-3] if len(prices) > 2 else prices[-1]
+    
+    # ===================
+    # SETUP A: ORB (Opening Range Breakout)
+    # ===================
+    if or_levels and regime != 'CHOP':
+        or_high = or_levels.get('5m_high', 0)
+        or_low = or_levels.get('5m_low', 0)
+        
+        # Breakout above OR high
+        if or_high and price > or_high and p2 <= or_high and rvol >= MIN_RVOL:
+            setups.append({
+                'type': 'ORB',
+                'direction': 'LONG',
+                'trigger_price': or_high,
+                'entry': price,
+                'stop': or_low,
+                'target1': price + (price - or_low),
+                'target2': price + 2 * (price - or_low),
+                'confidence': 80 if rvol >= 2.0 else 70
+            })
+        
+        # Breakdown below OR low
+        if or_low and price < or_low and p2 >= or_low and rvol >= MIN_RVOL:
+            setups.append({
+                'type': 'ORB',
+                'direction': 'SHORT',
+                'trigger_price': or_low,
+                'entry': price,
+                'stop': or_high,
+                'target1': price - (or_high - price),
+                'target2': price - 2 * (or_high - price),
+                'confidence': 80 if rvol >= 2.0 else 70
+            })
+    
+    # ===================
+    # SETUP B: VWAP Reclaim/Rejection
+    # ===================
+    vwap_buffer = vwap * 0.002  # 0.2% buffer
+    
+    # VWAP Reclaim (Long) - was below, now above and holding
+    if p3 < vwap and p2 < vwap and price > vwap + vwap_buffer:
+        setups.append({
+            'type': 'VWAP_RECLAIM',
+            'direction': 'LONG',
+            'trigger_price': vwap,
+            'entry': price,
+            'stop': vwap - vwap_buffer * 2,
+            'target1': levels.get('resistance', price * 1.01),
+            'target2': levels.get('pd_high', price * 1.02),
+            'confidence': 75 if rvol >= 1.5 else 65
+        })
+    
+    # VWAP Rejection (Short) - tested VWAP from below and failed
+    if p3 < vwap and p2 > vwap - vwap_buffer and p2 < vwap + vwap_buffer and price < vwap - vwap_buffer:
+        setups.append({
+            'type': 'VWAP_REJECT',
+            'direction': 'SHORT',
+            'trigger_price': vwap,
+            'entry': price,
+            'stop': vwap + vwap_buffer * 2,
+            'target1': levels.get('support', price * 0.99),
+            'target2': levels.get('pd_low', price * 0.98),
+            'confidence': 75 if rvol >= 1.5 else 65
+        })
+    
+    # ===================
+    # SETUP C: Pullback Continuation
+    # ===================
+    # Bullish trend pullback to 9 EMA
+    if regime == 'TREND' and price > e21 and e9 > e21:
+        # Price pulled back to 9 EMA and bouncing
+        if p2 <= e9 * 1.002 and p2 >= e9 * 0.998 and price > p2:
+            setups.append({
+                'type': 'PULLBACK',
+                'direction': 'LONG',
+                'trigger_price': e9,
+                'entry': price,
+                'stop': e21,
+                'target1': levels.get('resistance', price * 1.015),
+                'target2': levels.get('pd_high', price * 1.025),
+                'confidence': 80 if regime == 'TREND' else 60
+            })
+    
+    # Bearish trend pullback to 9 EMA
+    if regime == 'TREND' and price < e21 and e9 < e21:
+        if p2 >= e9 * 0.998 and p2 <= e9 * 1.002 and price < p2:
+            setups.append({
+                'type': 'PULLBACK',
+                'direction': 'SHORT',
+                'trigger_price': e9,
+                'entry': price,
+                'stop': e21,
+                'target1': levels.get('support', price * 0.985),
+                'target2': levels.get('pd_low', price * 0.975),
+                'confidence': 80 if regime == 'TREND' else 60
+            })
+    
+    # ===================
+    # SETUP D: Break & Retest
+    # ===================
+    key_levels = [
+        levels.get('pd_high'), levels.get('pd_low'),
+        levels.get('pm_high'), levels.get('pm_low'),
+        levels.get('whole'), levels.get('half_up'), levels.get('half_down')
+    ]
+    
+    for lvl in key_levels:
+        if lvl is None:
+            continue
+        lvl_buffer = lvl * 0.002
+        
+        # Break above and retest holding
+        if p3 < lvl and p2 > lvl and abs(price - lvl) < lvl_buffer and price > lvl:
+            setups.append({
+                'type': 'BREAK_RETEST',
+                'direction': 'LONG',
+                'trigger_price': lvl,
+                'entry': price,
+                'stop': lvl - lvl_buffer * 3,
+                'target1': price + (price - (lvl - lvl_buffer * 3)),
+                'target2': price + 2 * (price - (lvl - lvl_buffer * 3)),
+                'confidence': 70
+            })
+        
+        # Break below and retest holding
+        if p3 > lvl and p2 < lvl and abs(price - lvl) < lvl_buffer and price < lvl:
+            setups.append({
+                'type': 'BREAK_RETEST',
+                'direction': 'SHORT',
+                'trigger_price': lvl,
+                'entry': price,
+                'stop': lvl + lvl_buffer * 3,
+                'target1': price - ((lvl + lvl_buffer * 3) - price),
+                'target2': price - 2 * ((lvl + lvl_buffer * 3) - price),
+                'confidence': 70
+            })
+    
+    return setups
+
+# =============================================================================
+# CONFIRMATION ENGINE (NO IMPULSE TRADES)
+# =============================================================================
+def check_confirmation(sym, setup):
+    """
+    Check if a setup has been confirmed
+    Must hold for MIN_HOLD_CHECKS (3 checks = 15 seconds)
+    """
+    pending = st.session_state.setups_pending
+    setup_key = f"{sym}_{setup['type']}_{setup['direction']}"
+    
+    if setup_key not in pending:
+        # First time seeing this setup - start tracking
+        pending[setup_key] = {
+            'setup': setup,
+            'checks': 1,
+            'first_seen': datetime.now(),
+            'prices': [setup['entry']]
+        }
+        return False, "CONFIRMING (1/3)"
+    
+    # Setup exists - check if still valid
+    tracked = pending[setup_key]
+    tracked['checks'] += 1
+    tracked['prices'].append(setup['entry'])
+    
+    # Check if price is holding (not whipsawing back)
+    direction = setup['direction']
+    trigger = setup['trigger_price']
+    current = setup['entry']
+    
+    if direction == 'LONG' and current < trigger:
+        # Failed - price went back below trigger
+        del pending[setup_key]
+        return False, "FAILED - Price reversed"
+    
+    if direction == 'SHORT' and current > trigger:
+        # Failed - price went back above trigger
+        del pending[setup_key]
+        return False, "FAILED - Price reversed"
+    
+    # Check if enough confirmations
+    if tracked['checks'] >= MIN_HOLD_CHECKS:
+        # CONFIRMED! Clean up and return True
+        del pending[setup_key]
+        return True, "CONFIRMED"
+    
+    return False, f"CONFIRMING ({tracked['checks']}/{MIN_HOLD_CHECKS})"
+
+# =============================================================================
+# HOT SCORE CALCULATION
+# =============================================================================
+def calc_hot_score(rvol, regime, near_level, volume_spike, spread_ok, news_sentiment):
+    """Calculate HOT score (0-100) for trade eligibility"""
+    score = 0
+    
+    # RVOL contribution (+30 max)
+    if rvol >= 2.0:
+        score += 30
+    elif rvol >= 1.5:
+        score += 20
+    elif rvol >= 1.2:
+        score += 10
+    
+    # Near key level (+20)
+    if near_level:
+        score += 20
+    
+    # Regime contribution (+20)
+    if regime == 'TREND':
+        score += 20
+    elif regime == 'MIXED':
+        score += 10
+    # CHOP = 0
+    
+    # Volume spike (+15)
+    if volume_spike:
+        score += 15
+    
+    # Spread OK (+10)
+    if spread_ok:
+        score += 10
+    
+    # News sentiment (+5 to -20)
+    if news_sentiment == 'BULLISH':
+        score += 5
+    elif news_sentiment == 'POSITIVE':
+        score += 3
+    elif news_sentiment == 'CAUTION':
+        score -= 10
+    elif news_sentiment == 'DANGER':
+        score -= 20
+    
+    return max(0, min(100, score))
+
+# =============================================================================
+# STOCK DATA GENERATION & ANALYSIS
+# =============================================================================
+def gen_data(stk):
+    """Generate/update stock data with price history"""
+    sym, base = stk['s'], stk['p']
     real = get_price(sym)
     if real and real > 0:
-        b = real
-    if sym not in st.session_state.data:
-        p = [b]
-        for _ in range(99):
-            p.append(round(max(b * 0.8, min(b * 1.2, p[-1] + random.gauss(0, b * 0.01))), 2))
-        st.session_state.data[sym] = {'p': p, 'v': [random.randint(1000000, 10000000) for _ in range(100)]}
-    d = st.session_state.data[sym]
-    p = d['p']
-    new = real if real and real > 0 else round(max(b * 0.7, min(b * 1.3, p[-1] + random.gauss(0, b * 0.005))), 2)
-    p.append(new)
-    if len(p) > 100:
-        p.pop(0)
-    d['v'].append(random.randint(1000000, 10000000))
-    if len(d['v']) > 100:
-        d['v'].pop(0)
-    return new, p, d['v']
-
-def rsi(p, n=14):
-    """Calculate RSI"""
-    if len(p) < n + 1:
-        return 50.0
-    d = np.diff(p[-n-1:])
-    g, l = np.where(d > 0, d, 0), np.where(d < 0, -d, 0)
-    ag, al = np.mean(g), np.mean(l)
-    return 100.0 if al == 0 else round(100 - (100 / (1 + ag / al)), 1)
-
-def ema(p, n):
-    """Calculate EMA"""
-    if len(p) < n:
-        return p[-1] if p else 0
-    m, e = 2 / (n + 1), np.mean(p[:n])
-    for x in p[n:]:
-        e = (x * m) + (e * (1 - m))
-    return round(e, 4)
-
-def cnews(sym):
-    """Get cached news"""
-    k = f"{sym}_{datetime.now().strftime('%Y%m%d%H')}"
-    if k in st.session_state.nc:
-        return st.session_state.nc[k]
-    n = check_news(get_news(sym))
-    st.session_state.nc[k] = n
-    return n
-
-def analyze(stk):
-    """Full stock analysis with technicals + news"""
-    pr, ps, vs = gen(stk)
-    r = rsi(ps)
-    e9, e21 = ema(ps, 9), ema(ps, 21)
-    vwap = round(sum(a * b for a, b in zip(ps[-20:], vs[-20:])) / sum(vs[-20:]), 2) if len(ps) >= 20 else pr
-    sup, res = (round(min(ps[-20:]), 2), round(max(ps[-20:]), 2)) if len(ps) >= 20 else (pr * 0.98, pr * 1.02)
+        base = real
     
-    sc, sig = 0, {}
+    if sym not in st.session_state.data:
+        # Initialize with historical simulation
+        prices = [base]
+        for _ in range(99):
+            prices.append(round(max(base * 0.8, min(base * 1.2, prices[-1] + random.gauss(0, base * 0.008))), 2))
+        st.session_state.data[sym] = {
+            'prices': prices,
+            'volumes': [random.randint(500000, 5000000) for _ in range(100)]
+        }
+    
+    d = st.session_state.data[sym]
+    prices = d['prices']
+    volumes = d['volumes']
+    
+    # Update with new price
+    new_price = real if real and real > 0 else round(max(base * 0.7, min(base * 1.3, prices[-1] + random.gauss(0, base * 0.003))), 2)
+    prices.append(new_price)
+    if len(prices) > 100:
+        prices.pop(0)
+    
+    # Update volume
+    new_vol = random.randint(500000, 8000000)
+    volumes.append(new_vol)
+    if len(volumes) > 100:
+        volumes.pop(0)
+    
+    return new_price, prices, volumes
+
+def analyze_stock(stk):
+    """Full professional analysis of a stock"""
+    price, prices, volumes = gen_data(stk)
+    sym = stk['s']
+    
+    # Calculate all indicators
+    r = rsi(prices)
+    e9 = ema(prices, 9)
+    e21 = ema(prices, 21)
+    rvol = calc_rvol(volumes)
+    
+    # Calculate levels
+    levels = calc_levels(sym, prices, volumes)
+    or_levels = calc_opening_range(sym, prices)
+    vwap = levels.get('vwap', price)
+    
+    # Detect regime
+    regime = detect_regime(prices, vwap)
+    st.session_state.market_regime = regime
+    
+    # Get news
+    if sym not in st.session_state.nc:
+        news = check_news(get_news(sym))
+        st.session_state.nc[sym] = news
+    news = st.session_state.nc.get(sym, {'sent': 'NEUTRAL', 'red': [], 'green': [], 'block': False})
+    
+    # Check if near a key level
+    near_level = False
+    for lvl_name in ['vwap', 'support', 'resistance', 'pd_high', 'pd_low']:
+        lvl = levels.get(lvl_name, 0)
+        if lvl and abs(price - lvl) / price < 0.005:  # Within 0.5%
+            near_level = True
+            break
+    
+    # Volume spike check
+    volume_spike = rvol >= 2.0
+    
+    # Calculate HOT score
+    hot_score = calc_hot_score(rvol, regime, near_level, volume_spike, True, news['sent'])
+    
+    # Detect setups
+    setups = detect_setups(sym, price, prices, volumes, levels, or_levels, rvol, regime)
+    
+    # Build signal indicators
+    sigs = {}
     
     # RSI
     if r < 30:
-        sc += 2
-        sig['RSI'] = ('OVERSOLD', 'bu')
+        sigs['RSI'] = ('OVERSOLD', 'bu')
     elif r < 40:
-        sc += 1
-        sig['RSI'] = ('Low', 'bu')
+        sigs['RSI'] = ('Low', 'bu')
     elif r > 70:
-        sc -= 2
-        sig['RSI'] = ('OVERBOUGHT', 'be')
+        sigs['RSI'] = ('OVERBOUGHT', 'be')
     elif r > 60:
-        sc -= 1
-        sig['RSI'] = ('High', 'be')
+        sigs['RSI'] = ('High', 'be')
     else:
-        sig['RSI'] = ('Neutral', 'ne')
+        sigs['RSI'] = ('Neutral', 'ne')
     
     # EMA
-    if pr > e9 > e21:
-        sc += 1
-        sig['EMA'] = ('Bull', 'bu')
-    elif pr < e9 < e21:
-        sc -= 1
-        sig['EMA'] = ('Bear', 'be')
+    if price > e9 > e21:
+        sigs['EMA'] = ('Bull', 'bu')
+    elif price < e9 < e21:
+        sigs['EMA'] = ('Bear', 'be')
     else:
-        sig['EMA'] = ('Flat', 'ne')
+        sigs['EMA'] = ('Flat', 'ne')
     
     # VWAP
-    if pr > vwap * 1.005:
-        sc += 1
-        sig['VWAP'] = ('Above', 'bu')
-    elif pr < vwap * 0.995:
-        sc -= 1
-        sig['VWAP'] = ('Below', 'be')
+    if price > vwap * 1.003:
+        sigs['VWAP'] = ('Above', 'bu')
+    elif price < vwap * 0.997:
+        sigs['VWAP'] = ('Below', 'be')
     else:
-        sig['VWAP'] = ('At', 'ne')
+        sigs['VWAP'] = ('At', 'ne')
     
-    # Support/Resistance
-    ds, dr = ((pr - sup) / pr) * 100, ((res - pr) / pr) * 100
-    if ds < 1:
-        sc += 2
-        sig['S/R'] = ('SUPPORT', 'bu')
-    elif dr < 1:
-        sc -= 2
-        sig['S/R'] = ('RESIST', 'be')
+    # RVOL
+    if rvol >= 2.0:
+        sigs['RVOL'] = (f'{rvol}x', 'bu')
+    elif rvol >= 1.5:
+        sigs['RVOL'] = (f'{rvol}x', 'ne')
     else:
-        sig['S/R'] = ('Mid', 'ne')
+        sigs['RVOL'] = (f'{rvol}x', 'be')
     
-    # Volume
-    vs_r = vs[-1] / np.mean(vs[-20:-1]) if len(vs) > 20 else 1
-    if vs_r > 2:
-        sc += 1 if sc > 0 else -1
-        sig['VOL'] = ('SPIKE', 'bu' if sc > 0 else 'be')
+    # Regime
+    if regime == 'TREND':
+        sigs['REGIME'] = ('TREND', 'bu')
+    elif regime == 'CHOP':
+        sigs['REGIME'] = ('CHOP', 'be')
     else:
-        sig['VOL'] = ('Normal', 'ne')
+        sigs['REGIME'] = ('MIXED', 'ne')
     
-    # NEWS - The Game Changer
-    nws = cnews(stk['s'])
-    blk = False
-    if nws['sent'] == 'DANGER':
-        sc -= 5
-        blk = True
-        sig['NEWS'] = ('DANGER', 'be')
-    elif nws['sent'] == 'CAUTION':
-        sc -= 2
-        sig['NEWS'] = ('CAUTION', 'be')
-    elif nws['sent'] == 'BULLISH':
-        sc += 2
-        sig['NEWS'] = ('BULLISH', 'bu')
-    elif nws['sent'] == 'POSITIVE':
-        sc += 1
-        sig['NEWS'] = ('GOOD', 'bu')
+    # News
+    if news['sent'] == 'DANGER':
+        sigs['NEWS'] = ('DANGER', 'be')
+    elif news['sent'] == 'CAUTION':
+        sigs['NEWS'] = ('CAUTION', 'be')
+    elif news['sent'] == 'BULLISH':
+        sigs['NEWS'] = ('BULLISH', 'bu')
+    elif news['sent'] == 'POSITIVE':
+        sigs['NEWS'] = ('GOOD', 'bu')
     else:
-        sig['NEWS'] = ('OK', 'ne')
+        sigs['NEWS'] = ('OK', 'ne')
     
-    # Signal
-    if blk:
+    # Determine overall signal
+    best_setup = None
+    signal = 'WAIT'
+    setup_status = None
+    
+    if news['block']:
         signal = 'BLOCKED'
-    elif sc >= 5:
-        signal = 'STRONG BUY'
-    elif sc >= MIN_SCORE:
-        signal = 'BUY'
-    elif sc <= -5:
-        signal = 'STRONG SELL'
-    elif sc <= -MIN_SCORE:
-        signal = 'SELL'
-    else:
-        signal = 'WAIT'
+    elif setups and hot_score >= MIN_SETUP_SCORE:
+        # Pick best setup by confidence
+        best_setup = max(setups, key=lambda x: x['confidence'])
+        
+        # Check confirmation
+        confirmed, status = check_confirmation(sym, best_setup)
+        setup_status = status
+        
+        if confirmed:
+            if best_setup['direction'] == 'LONG':
+                signal = 'BUY'
+            else:
+                signal = 'SELL'
+        else:
+            signal = 'PENDING'
     
-    # Option cost (capped at 5% of balance)
-    mx = (st.session_state.bal * MAX_POS) / 100
-    oc = min(max(5, round(pr * 0.03 * random.uniform(0.8, 1.2), 2)), mx, 80)
+    # Calculate option cost (max 5% of balance)
+    max_cost = (st.session_state.bal * MAX_POS) / 100
+    oc = min(max(5, round(price * 0.03 * random.uniform(0.8, 1.2), 2)), max_cost, 80)
     
     return {
-        'sym': stk['s'],
+        'sym': sym,
         'name': stk['n'],
-        'pr': pr,
-        'chg': round(pr - ps[-2] if len(ps) > 1 else 0, 2),
-        'sc': sc,
-        'sig': signal,
-        'sigs': sig,
+        'pr': price,
+        'chg': round(price - prices[-2] if len(prices) > 1 else 0, 2),
+        'sigs': sigs,
         'oc': oc,
         'sl': round(oc * (1 - STOP_LOSS), 2),
         'tp': round(oc * (1 + TAKE_PROFIT), 2),
-        'news': nws,
-        'blk': blk
+        'news': news,
+        'blk': news['block'],
+        'hot_score': hot_score,
+        'regime': regime,
+        'rvol': rvol,
+        'setups': setups,
+        'best_setup': best_setup,
+        'signal': signal,
+        'setup_status': setup_status,
+        'levels': levels
     }
 
 def scan():
-    """Scan all stocks and sort by score"""
-    return sorted([analyze(s) for s in STOCKS], key=lambda x: abs(x['sc']), reverse=True)
+    """Scan all stocks and sort by HOT score"""
+    results = [analyze_stock(s) for s in STOCKS]
+    return sorted(results, key=lambda x: x['hot_score'], reverse=True)
 
-def tick(a, sym, d):
-    """Add to ticker"""
+# =============================================================================
+# TRADING FUNCTIONS
+# =============================================================================
+def tick(action, sym, direction):
+    """Add to trade ticker"""
     st.session_state.ticker.append({
         't': datetime.now().strftime('%H:%M:%S'),
-        'a': a,
+        'a': action,
         's': sym,
-        'd': d
+        'd': direction
     })
     if len(st.session_state.ticker) > 15:
         st.session_state.ticker.pop(0)
 
+def hit_limit():
+    """Check daily loss limit"""
+    if st.session_state.daily <= -(st.session_state.start * DAILY_LIMIT):
+        st.session_state.locked = True
+    return st.session_state.locked
+
 def can_buy(stk):
-    """Check all conditions before trade"""
+    """Check all conditions before allowing a trade"""
     tier = TIERS[st.session_state.tier]
+    
+    # News block
     if stk.get('blk'):
         return False, "News blocked"
+    
+    # Daily limit
     if hit_limit():
-        return False, "Daily limit"
+        return False, "Daily limit hit"
+    
+    # Max positions
     if len(st.session_state.pos) >= tier['trades']:
         return False, "Max positions"
+    
+    # Balance check
     if st.session_state.bal < stk['oc'] * 100:
-        return False, "No balance"
-    _, _, _, op = mkt()
-    if not op:
+        return False, "Insufficient balance"
+    
+    # Market status
+    _, _, _, market_open, in_window = mkt()
+    if not market_open:
         return False, "Market closed"
-    if abs(stk['sc']) < MIN_SCORE:
-        return False, f"Score < {MIN_SCORE}"
+    
+    # Trading window check
+    if not in_window:
+        return False, "Outside trading window"
+    
+    # Cooldown check
+    in_cooldown, remaining = is_in_cooldown()
+    if in_cooldown:
+        return False, f"Cooldown: {remaining}s"
+    
+    # HOT score check
+    if stk['hot_score'] < MIN_SETUP_SCORE:
+        return False, f"HOT score {stk['hot_score']} < {MIN_SETUP_SCORE}"
+    
+    # Signal check - must be confirmed BUY or SELL
+    if stk['signal'] not in ['BUY', 'SELL']:
+        return False, f"Signal: {stk['signal']}"
+    
+    # Regime check - no trades in CHOP
+    if stk['regime'] == 'CHOP':
+        return False, "CHOP regime - no trades"
+    
     return True, "OK"
 
-def buy(stk, d):
+def buy(stk, direction):
     """Execute buy"""
-    ok, _ = can_buy(stk)
+    ok, reason = can_buy(stk)
     if not ok:
-        return False
+        return False, reason
+    
     cost = stk['oc'] * 100
     st.session_state.bal -= cost
     
-    # Create position with tracking
-    pos_id = f"{stk['sym']}_{datetime.now().strftime('%H%M%S')}"
+    setup_type = stk['best_setup']['type'] if stk['best_setup'] else 'MANUAL'
+    
     st.session_state.pos.append({
-        'id': pos_id,
+        'id': f"{stk['sym']}_{datetime.now().strftime('%H%M%S')}",
         'sym': stk['sym'],
-        'dir': d,
+        'dir': direction,
+        'setup': setup_type,
         'entry': stk['oc'],
         'cur': stk['oc'],
         'sl': stk['sl'],
         'tp': stk['tp'],
         'pnl': 0,
-        'ticks': 0  # Track how many updates
+        'ticks': 0,
+        'entry_time': datetime.now()
     })
     
-    tick('BUY', stk['sym'], d)
-    return True
+    tick('BUY', stk['sym'], direction)
+    return True, "OK"
 
 def sell(i):
     """Execute sell"""
     if i >= len(st.session_state.pos):
         return
+    
     p = st.session_state.pos[i]
     st.session_state.bal += (p['entry'] * 100) + p['pnl']
     st.session_state.daily += p['pnl']
@@ -517,10 +995,12 @@ def sell(i):
         st.session_state.wins += 1
     else:
         st.session_state.losses += 1
+        st.session_state.last_loss_time = datetime.now()  # Start cooldown
     
     st.session_state.trades.append({
         'sym': p['sym'],
         'dir': p['dir'],
+        'setup': p.get('setup', 'N/A'),
         'pnl': p['pnl'],
         't': datetime.now().strftime('%H:%M:%S'),
         'd': datetime.now().strftime('%Y-%m-%d')
@@ -530,17 +1010,15 @@ def sell(i):
     st.session_state.pos.pop(i)
 
 def update():
-    """Update positions with REALISTIC price movement"""
+    """Update positions with realistic price movement"""
     for i, p in enumerate(st.session_state.pos):
         p['ticks'] += 1
         
-        # REALISTIC MOVEMENT: Small changes that accumulate over time
-        # -2% to +2.5% per 5-second tick (slight bullish bias)
-        # This means it takes ~12-15 ticks to hit stop/profit on average
-        change = random.gauss(0.003, 0.015)  # Mean slightly positive, std dev 1.5%
-        change = max(-0.025, min(0.03, change))  # Cap at -2.5% to +3%
+        # Realistic movement: small changes accumulating
+        change = random.gauss(0.002, 0.012)
+        change = max(-0.02, min(0.025, change))
         
-        p['cur'] = round(p['entry'] * (1 + (change * p['ticks'] * 0.1)), 2)
+        p['cur'] = round(p['entry'] * (1 + change), 2)
         p['pnl'] = round((p['cur'] - p['entry']) * 100, 2)
         
         # Auto-exit if autopilot ON or STARTER tier
@@ -553,29 +1031,41 @@ def update():
                 return
 
 def auto_trade(stks):
-    """Automatically enter trades when signals hit"""
+    """Automatically enter trades when CONFIRMED signals hit"""
     # Skip if autopilot OFF (unless STARTER)
     if not st.session_state.auto and st.session_state.tier != 1:
         return
     
     tier = TIERS[st.session_state.tier]
-    _, _, _, op = mkt()
+    _, _, _, market_open, in_window = mkt()
     
     # Safety checks
-    if not op or hit_limit() or len(st.session_state.pos) >= tier['trades']:
+    if not market_open or not in_window:
+        return
+    if hit_limit():
+        return
+    if len(st.session_state.pos) >= tier['trades']:
         return
     
-    # Scan for opportunities
+    # Check cooldown
+    in_cooldown, _ = is_in_cooldown()
+    if in_cooldown:
+        return
+    
+    # Scan for opportunities - ONLY CONFIRMED SIGNALS
     for stk in stks[:tier['stocks']]:
         if len(st.session_state.pos) >= tier['trades']:
             break
         
-        if stk['sig'] in ['STRONG BUY', 'BUY']:
-            if buy(stk, 'CALL'):
+        # Must be confirmed BUY or SELL signal
+        if stk['signal'] == 'BUY':
+            success, _ = buy(stk, 'CALL')
+            if success:
                 st.balloons()
                 break
-        elif stk['sig'] in ['STRONG SELL', 'SELL']:
-            if buy(stk, 'PUT'):
+        elif stk['signal'] == 'SELL':
+            success, _ = buy(stk, 'PUT')
+            if success:
                 st.balloons()
                 break
 
@@ -584,7 +1074,7 @@ def auto_trade(stks):
 # =============================================================================
 def home():
     st.markdown('<div class="logo"><span>🌱</span><span>PROJECT HOPE</span></div>', unsafe_allow_html=True)
-    st.markdown('<div class="hero"><h1>OPTIONS TRADING</h1><p class="sub">5-Layer Protection Built In</p><p class="tag">Turn $200 into $2,000 - Without Risking It All</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero"><h1>OPTIONS TRADING</h1><p class="sub">Professional Entry Logic</p><p class="tag">4 A+ Setups | Confirmation Required | No Impulse Trades</p></div>', unsafe_allow_html=True)
     
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -606,56 +1096,68 @@ def home():
             st.rerun()
     
     if acct:
-        st.markdown(f'<div class="conn"><span style="color:#00FFA3;font-weight:700;">✓ ALPACA CONNECTED</span> | <span style="color:#FFD700;font-weight:700;">${st.session_state.bal:,.2f}</span></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="conn"><span style="color:#00FFA3;font-weight:700;">✓ ALPACA</span> | <span style="color:#FFD700;font-weight:700;">${st.session_state.bal:,.2f}</span></div>', unsafe_allow_html=True)
     
-    status, ct, cd, _ = mkt()
-    st.markdown(f'<div class="clk {status}"><p style="color:#808495;margin:0;font-size:0.85em;">{ct}</p><p style="font-size:1.3em;font-weight:800;color:#00E5FF;margin:6px 0 0;font-family:monospace;">{cd}</p></div>', unsafe_allow_html=True)
+    status, ct, cd, _, in_window = mkt()
+    window_text = "🟢 TRADING WINDOW" if in_window else "🔴 OUTSIDE WINDOW"
+    st.markdown(f'<div class="clk {status}"><p style="color:#808495;margin:0;font-size:0.85em;">{ct}</p><p style="font-size:1.3em;font-weight:800;color:#00E5FF;margin:6px 0 0;font-family:monospace;">{cd}</p><p style="font-size:0.8em;margin:4px 0 0;">{window_text}</p></div>', unsafe_allow_html=True)
+    
+    st.markdown("### 🎯 Professional Trading Logic")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown('<div class="card stat"><p class="v" style="color:#00FFA3;">4</p><p class="l">A+ Setups</p></div>', unsafe_allow_html=True)
+    with c2:
+        st.markdown('<div class="card stat"><p class="v" style="color:#FFD700;">3x</p><p class="l">Confirm</p></div>', unsafe_allow_html=True)
+    with c3:
+        st.markdown('<div class="card stat"><p class="v" style="color:#00E5FF;">2</p><p class="l">Windows</p></div>', unsafe_allow_html=True)
+    with c4:
+        st.markdown('<div class="card stat"><p class="v" style="color:#A855F7;">10m</p><p class="l">Cooldown</p></div>', unsafe_allow_html=True)
     
     st.markdown("### 🛡️ 5-Layer Protection")
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
-        st.markdown('<div class="card stat"><p class="v" style="color:#00FFA3;">-25%</p><p class="l">Stop Loss</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="card stat"><p class="v" style="color:#00FFA3;">-25%</p><p class="l">Stop</p></div>', unsafe_allow_html=True)
     with c2:
-        st.markdown('<div class="card stat"><p class="v" style="color:#FFD700;">+30%</p><p class="l">Take Profit</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="card stat"><p class="v" style="color:#FFD700;">+30%</p><p class="l">Profit</p></div>', unsafe_allow_html=True)
     with c3:
-        st.markdown('<div class="card stat"><p class="v" style="color:#FF4B4B;">-15%</p><p class="l">Daily Max</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="card stat"><p class="v" style="color:#FF4B4B;">-15%</p><p class="l">Daily</p></div>', unsafe_allow_html=True)
     with c4:
-        st.markdown('<div class="card stat"><p class="v" style="color:#00E5FF;">5%</p><p class="l">Per Trade</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="card stat"><p class="v" style="color:#00E5FF;">5%</p><p class="l">Max</p></div>', unsafe_allow_html=True)
     with c5:
-        st.markdown('<div class="card stat"><p class="v" style="color:#A855F7;">📰</p><p class="l">News Filter</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="card stat"><p class="v" style="color:#A855F7;">📰</p><p class="l">News</p></div>', unsafe_allow_html=True)
     
     st.markdown("### 👨‍💻 Founder")
     c1, c2 = st.columns([1, 3])
     with c1:
         st.markdown(f'<img src="{PHOTO}" class="ph">', unsafe_allow_html=True)
     with c2:
-        st.markdown(f'<div><h4 style="color:white;margin:0;">{NAME}</h4><p style="color:#00FFA3;margin:2px 0;font-size:0.9em;">Amazon Worker | Self-Taught Developer</p><p style="color:#808495;margin:0;font-size:0.85em;">{LOCATION}</p></div>', unsafe_allow_html=True)
+        st.markdown(f'<div><h4 style="color:white;margin:0;">{NAME}</h4><p style="color:#00FFA3;margin:2px 0;font-size:0.9em;">Amazon Worker | Self-Taught Dev</p><p style="color:#808495;margin:0;font-size:0.85em;">{LOCATION}</p></div>', unsafe_allow_html=True)
     
-    with st.expander("📖 My Story"):
+    with st.expander("My Story"):
         st.write(BIO)
     
-    st.markdown("### 💎 Choose Your Plan")
+    st.markdown("### 💎 Plans")
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown('<div class="tier"><h3 style="color:#00FFA3;">STARTER</h3><p class="pr">$49<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 1 Stock</p><p class="f"><span class="yes">✓</span> 1 Trade</p><p class="f"><span class="yes">✓</span> Auto Always On</p><p class="f"><span class="yes">✓</span> News Filter</p><p class="f"><span class="no">✗</span> Manual Mode</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="tier"><h3 style="color:#00FFA3;">STARTER</h3><p class="pr">$49<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 1 Stock</p><p class="f"><span class="yes">✓</span> 1 Trade</p><p class="f"><span class="yes">✓</span> Auto Always</p><p class="f"><span class="yes">✓</span> All Protections</p><p class="f"><span class="no">✗</span> Manual</p></div>', unsafe_allow_html=True)
     with c2:
-        st.markdown('<div class="tier"><h3 style="color:#00E5FF;">BUILDER</h3><p class="pr">$99<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 3 Stocks</p><p class="f"><span class="yes">✓</span> 2 Trades</p><p class="f"><span class="yes">✓</span> Auto Toggle</p><p class="f"><span class="yes">✓</span> News Filter</p><p class="f"><span class="no">✗</span> Coaching</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="tier"><h3 style="color:#00E5FF;">BUILDER</h3><p class="pr">$99<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 3 Stocks</p><p class="f"><span class="yes">✓</span> 2 Trades</p><p class="f"><span class="yes">✓</span> Auto Toggle</p><p class="f"><span class="yes">✓</span> All Protections</p><p class="f"><span class="no">✗</span> Coaching</p></div>', unsafe_allow_html=True)
     with c3:
-        st.markdown('<div class="tier" style="box-shadow:0 0 30px rgba(255,215,0,0.15);border:1px solid rgba(255,215,0,0.2);"><span class="badge">POPULAR</span><h3 style="color:#FFD700;">MASTER</h3><p class="pr">$199<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 6 Stocks</p><p class="f"><span class="yes">✓</span> 3 Trades</p><p class="f"><span class="yes">✓</span> Auto Toggle</p><p class="f"><span class="yes">✓</span> Priority Support</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="tier" style="box-shadow:0 0 30px rgba(255,215,0,0.15);border:1px solid rgba(255,215,0,0.2);"><span class="badge">POPULAR</span><h3 style="color:#FFD700;">MASTER</h3><p class="pr">$199<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 6 Stocks</p><p class="f"><span class="yes">✓</span> 3 Trades</p><p class="f"><span class="yes">✓</span> Auto Toggle</p><p class="f"><span class="yes">✓</span> Priority</p></div>', unsafe_allow_html=True)
     with c4:
-        st.markdown('<div class="tier"><h3 style="color:#FF6B6B;">VIP</h3><p class="pr">$499<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 15 Stocks</p><p class="f"><span class="yes">✓</span> 5 Trades</p><p class="f"><span class="yes">✓</span> 1-on-1 Coaching</p><p class="f"><span class="yes">✓</span> Private Community</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="tier"><h3 style="color:#FF6B6B;">VIP</h3><p class="pr">$499<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 15 Stocks</p><p class="f"><span class="yes">✓</span> 5 Trades</p><p class="f"><span class="yes">✓</span> 1-on-1 Coach</p><p class="f"><span class="yes">✓</span> Community</p></div>', unsafe_allow_html=True)
     
-    st.markdown("### 🔐 Enter Access Code")
+    st.markdown("### 🔐 Access Code")
     _, c2, _ = st.columns([1, 2, 1])
     with c2:
-        code = st.text_input("Code", type="password", label_visibility="collapsed", placeholder="Enter your access code...")
+        code = st.text_input("Code", type="password", label_visibility="collapsed", placeholder="Enter code...")
         codes = {"HOPE49": 1, "HOPE99": 2, "HOPE199": 3, "HOPE499": 4, "DEMO": 3}
         if code:
             if code.upper() in codes:
                 st.session_state.tier = codes[code.upper()]
-                st.success(f"✓ Welcome! {TIERS[st.session_state.tier]['name']} Tier Activated")
+                st.success(f"✓ {TIERS[st.session_state.tier]['name']}")
             else:
-                st.error("Invalid code")
+                st.error("Invalid")
         if st.session_state.tier > 0:
             if st.button("🚀 Start Trading", type="primary", use_container_width=True):
                 st.session_state.page = 'trade'
@@ -664,35 +1166,28 @@ def home():
     # Footer
     st.markdown(f'<div class="ft"><p style="color:#808495;font-size:0.85em;margin:0;">{NAME} | {EMAIL}</p><p style="color:#666;font-size:0.75em;margin:8px 0 0;">Educational tool only. Not financial advice.</p></div>', unsafe_allow_html=True)
     
-    # Legal Disclaimer Dropdown
+    # Legal Disclaimer
     with st.expander("📜 Full Legal Disclaimer"):
         st.markdown("""
 **IMPORTANT LEGAL DISCLAIMER**
 
-I am **NOT** a financial advisor. I am not a licensed broker, investment advisor, or financial planner. I am a regular person who built this app to help other regular people.
+I am **NOT** a financial advisor. I am not a licensed broker, investment advisor, or financial planner.
 
-**Project Hope is an EDUCATIONAL tool only.** Nothing in this app constitutes financial advice, investment advice, trading advice, or any other sort of advice. You should not treat any of the app's content as such.
+**Project Hope is an EDUCATIONAL tool only.** Nothing in this app constitutes financial advice.
 
-**RISK WARNING:** Options trading involves substantial risk of loss and is not suitable for all investors. Past performance is not indicative of future results. You could lose some or all of your investment.
-
-**KEY POINTS:**
-- Only trade with money you can afford to lose
-- Paper trading results do not guarantee real trading results
-- Always do your own research before making any trades
-- Consider consulting a licensed financial advisor
+**RISK WARNING:** Options trading involves substantial risk of loss. Past performance is not indicative of future results.
 
 **By using Project Hope, you acknowledge that:**
 1. You are solely responsible for your own trading decisions
 2. You understand the risks involved in options trading
 3. You will not hold Stephen Martinez or Project Hope liable for any losses
-4. This is educational software, not financial advice
 
-**Trade responsibly. Protect your capital. That's what Project Hope is all about.**
+**Trade responsibly. Protect your capital.**
         """)
 
 def trade():
     if st.session_state.tier == 0:
-        st.warning("Please enter your access code on the Home page")
+        st.warning("Enter code first")
         if st.button("Go Home"):
             st.session_state.page = 'home'
             st.rerun()
@@ -700,7 +1195,7 @@ def trade():
     
     tier = TIERS[st.session_state.tier]
     
-    # Update existing positions
+    # Update positions
     update()
     
     # Scan stocks
@@ -714,8 +1209,9 @@ def trade():
     with c1:
         st.markdown(f'<div style="display:flex;align-items:center;gap:8px;"><span style="font-size:1.3em;">🌱</span><span style="font-size:1.2em;font-weight:800;background:linear-gradient(135deg,#00FFA3,#00E5FF);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">PROJECT HOPE</span><span style="color:{tier["color"]};font-weight:600;background:rgba(255,255,255,0.1);padding:3px 8px;border-radius:6px;font-size:0.8em;">{tier["name"]}</span></div>', unsafe_allow_html=True)
     with c2:
-        status, _, cd, _ = mkt()
-        st.markdown(f'<div class="clk {status}" style="padding:6px;"><span style="font-size:0.8em;font-weight:600;">{cd}</span></div>', unsafe_allow_html=True)
+        status, _, cd, _, in_window = mkt()
+        window_color = "#00FFA3" if in_window else "#FF4B4B"
+        st.markdown(f'<div class="clk {status}" style="padding:6px;"><span style="font-size:0.8em;font-weight:600;">{cd}</span><br><span style="font-size:0.7em;color:{window_color};">{"🟢 WINDOW" if in_window else "🔴 NO TRADE"}</span></div>', unsafe_allow_html=True)
     
     # Nav
     c1, c2, c3, c4 = st.columns(4)
@@ -746,43 +1242,79 @@ def trade():
     with c4:
         tot = st.session_state.wins + st.session_state.losses
         wr = (st.session_state.wins / tot * 100) if tot > 0 else 0
-        st.metric("Win Rate", f"{wr:.0f}%")
+        st.metric("Win%", f"{wr:.0f}%")
     
-    # Autopilot status
+    # Regime display
+    regime = st.session_state.market_regime
+    regime_class = "regime-trend" if regime == "TREND" else "regime-chop"
+    st.markdown(f'<div style="text-align:center;margin:10px 0;"><span class="{regime_class}">Market: <strong>{regime}</strong> | VWAP Crosses: {st.session_state.vwap_crosses}</span></div>', unsafe_allow_html=True)
+    
+    # Status displays
+    in_cooldown, cooldown_remaining = is_in_cooldown()
+    
     if hit_limit():
-        st.markdown('<div class="lck"><span style="color:#FF4B4B;font-weight:700;">🔒 DAILY LIMIT REACHED - Trading Locked Until Tomorrow</span></div>', unsafe_allow_html=True)
+        st.markdown('<div class="lck"><span style="color:#FF4B4B;font-weight:700;">🔒 DAILY LIMIT - Trading locked</span></div>', unsafe_allow_html=True)
+    elif in_cooldown:
+        st.markdown(f'<div class="cooldown"><span style="color:#FFA500;font-weight:700;">⏳ COOLDOWN: {cooldown_remaining}s remaining</span></div>', unsafe_allow_html=True)
     elif tier['auto'] == 'always':
-        st.markdown('<div class="aon"><span style="color:#00FFA3;font-weight:700;">🤖 AUTOPILOT: ALWAYS ON (Starter Tier)</span></div>', unsafe_allow_html=True)
+        st.markdown('<div class="aon"><span style="color:#00FFA3;font-weight:700;">🤖 AUTOPILOT ALWAYS ON</span></div>', unsafe_allow_html=True)
     else:
         c1, c2 = st.columns([4, 1])
         with c1:
-            if st.session_state.auto:
-                st.markdown('<div class="aon"><span style="color:#00FFA3;font-weight:700;">🤖 AUTOPILOT: ON - Auto-scanning & trading</span></div>', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="aoff"><span style="color:#808495;font-weight:700;">🤖 AUTOPILOT: OFF - Manual mode</span></div>', unsafe_allow_html=True)
+            status_class = "aon" if st.session_state.auto else "aoff"
+            status_color = "#00FFA3" if st.session_state.auto else "#808495"
+            st.markdown(f'<div class="{status_class}"><span style="color:{status_color};font-weight:700;">🤖 AUTO: {"ON" if st.session_state.auto else "OFF"}</span></div>', unsafe_allow_html=True)
         with c2:
             if st.button("Toggle", use_container_width=True):
                 st.session_state.auto = not st.session_state.auto
                 st.rerun()
     
-    # Shield
-    st.markdown(f'<div class="shld"><p style="font-weight:800;color:#00FFA3;margin:0;font-size:1em;">🛡️ 5-LAYER PROTECTION ACTIVE</p><p style="color:#808495;margin:4px 0 0;font-size:0.8em;">Stop -25% | Profit +30% | Daily -15% | Max 5% | News Filter</p></div>', unsafe_allow_html=True)
+    # Protection shield
+    st.markdown(f'<div class="shld"><p style="font-weight:800;color:#00FFA3;margin:0;font-size:1em;">🛡️ PROFESSIONAL PROTECTION</p><p style="color:#808495;margin:4px 0 0;font-size:0.8em;">Confirmed Entries | Stop -25% | Profit +30% | Max {tier["trades"]} | Cooldown 10m</p></div>', unsafe_allow_html=True)
     
     # Main content
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.markdown(f"### 📊 Stock Scanner ({tier['stocks']} stocks)")
+        st.markdown(f"### 📊 Scanner ({tier['stocks']} stocks)")
+        st.markdown('<p style="color:#808495;font-size:0.8em;">Only CONFIRMED setups trigger trades</p>', unsafe_allow_html=True)
         
         for stk in stks[:tier['stocks']]:
-            cc = 'blk' if stk['blk'] else 'buy' if stk['sc'] >= MIN_SCORE else 'sell' if stk['sc'] <= -MIN_SCORE else 'wait'
+            # Card style based on signal
+            if stk['blk']:
+                cc = 'blk'
+            elif stk['signal'] == 'BUY':
+                cc = 'buy'
+            elif stk['signal'] == 'SELL':
+                cc = 'sell'
+            elif stk['signal'] == 'PENDING':
+                cc = 'pending'
+            else:
+                cc = 'wait'
+            
             chc = "#00FFA3" if stk['chg'] >= 0 else "#FF4B4B"
-            sgc = "#FF0000" if stk['blk'] else "#00FFA3" if stk['sc'] >= MIN_SCORE else "#FF4B4B" if stk['sc'] <= -MIN_SCORE else "#FFD700"
+            
+            # Signal color
+            if stk['signal'] == 'BUY':
+                sgc = "#00FFA3"
+            elif stk['signal'] == 'SELL':
+                sgc = "#FF4B4B"
+            elif stk['signal'] == 'PENDING':
+                sgc = "#FFD700"
+            elif stk['signal'] == 'BLOCKED':
+                sgc = "#FF0000"
+            else:
+                sgc = "#808495"
+            
+            # Setup type display
+            setup_text = ""
+            if stk['best_setup']:
+                setup_text = f'<span class="setup-tag">{stk["best_setup"]["type"]}</span>'
             
             st.markdown(f'''<div class="stk {cc}">
                 <div style="display:flex;justify-content:space-between;">
                     <div>
-                        <h4 style="color:white;margin:0;font-size:1em;">{stk["sym"]}</h4>
+                        <h4 style="color:white;margin:0;font-size:1em;">{stk["sym"]} {setup_text}</h4>
                         <p style="color:#808495;margin:2px 0 0;font-size:0.8em;">{stk["name"]}</p>
                     </div>
                     <div style="text-align:right;">
@@ -791,10 +1323,14 @@ def trade():
                     </div>
                 </div>
                 <div style="display:flex;justify-content:space-between;margin-top:8px;">
-                    <span style="color:{sgc};font-weight:700;font-size:0.9em;">{stk["sig"]} ({stk["sc"]}/8)</span>
-                    <span style="color:#808495;font-size:0.8em;">~${int(stk["oc"])}/contract</span>
+                    <span style="color:{sgc};font-weight:700;font-size:0.9em;">{stk["signal"]}</span>
+                    <span style="color:#808495;font-size:0.8em;">HOT: {stk["hot_score"]} | RVOL: {stk["rvol"]}x</span>
                 </div>
             </div>''', unsafe_allow_html=True)
+            
+            # Setup status
+            if stk['setup_status']:
+                st.markdown(f'<p style="color:#FFD700;font-size:0.8em;margin:-5px 0 5px 10px;">⏳ {stk["setup_status"]}</p>', unsafe_allow_html=True)
             
             # Indicators
             ih = "".join([f'<span class="ind {v[1]}">{k}</span>' for k, v in stk['sigs'].items()])
@@ -802,22 +1338,11 @@ def trade():
             
             # News alerts
             if stk['news']['sent'] == 'DANGER':
-                st.markdown(f'<div class="nb"><span style="color:#FF4B4B;">⚠️ BLOCKED: {", ".join(stk["news"]["red"][:2])}</span></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="nb"><span style="color:#FF4B4B;">⚠️ {", ".join(stk["news"]["red"][:2])}</span></div>', unsafe_allow_html=True)
             elif stk['news']['sent'] == 'CAUTION':
-                st.markdown(f'<div class="nw"><span style="color:#FFA500;">⚡ Caution: {", ".join(stk["news"]["red"][:1])}</span></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="nw"><span style="color:#FFA500;">⚡ {", ".join(stk["news"]["red"][:1])}</span></div>', unsafe_allow_html=True)
             elif stk['news']['sent'] == 'BULLISH':
-                st.markdown(f'<div class="ng"><span style="color:#00FFA3;">📈 Bullish: {", ".join(stk["news"]["green"][:2])}</span></div>', unsafe_allow_html=True)
-            
-            # Manual buy button
-            if tier['auto'] != 'always' and not st.session_state.auto:
-                if stk['sig'] in ['STRONG BUY', 'BUY', 'STRONG SELL', 'SELL'] and not stk['blk']:
-                    if len(st.session_state.pos) < tier['trades'] and not hit_limit():
-                        d = 'CALL' if stk['sc'] > 0 else 'PUT'
-                        if st.button(f"BUY {d} ${int(stk['oc']*100)}", key=f"b_{stk['sym']}", use_container_width=True):
-                            if buy(stk, d):
-                                st.success("✓ Position Opened!")
-                                st.balloons()
-                                st.rerun()
+                st.markdown(f'<div class="ng"><span style="color:#00FFA3;">📈 {", ".join(stk["news"]["green"][:2])}</span></div>', unsafe_allow_html=True)
     
     with col2:
         st.markdown(f"### 📈 Positions ({len(st.session_state.pos)}/{tier['trades']})")
@@ -825,19 +1350,15 @@ def trade():
         if st.session_state.pos:
             for i, p in enumerate(st.session_state.pos):
                 pc = "#00FFA3" if p['pnl'] >= 0 else "#FF4B4B"
-                pct = ((p['cur'] - p['entry']) / p['entry'] * 100) if p['entry'] > 0 else 0
                 st.markdown(f'''<div class="pcard" style="border-left:3px solid {pc};">
                     <div style="display:flex;justify-content:space-between;">
                         <div>
                             <h4 style="color:white;margin:0;font-size:0.95em;">{p["sym"]}</h4>
-                            <p style="color:#808495;font-size:0.75em;">{p["dir"]} @ ${p["entry"]:.2f}</p>
+                            <p style="color:#808495;font-size:0.75em;">{p["dir"]} | {p.get("setup", "N/A")}</p>
                         </div>
-                        <div style="text-align:right;">
-                            <h4 style="color:{pc};margin:0;">${p["pnl"]:+.2f}</h4>
-                            <p style="color:{pc};font-size:0.75em;">{pct:+.1f}%</p>
-                        </div>
+                        <h4 style="color:{pc};margin:0;">${p["pnl"]:+.2f}</h4>
                     </div>
-                    <p style="color:#808495;font-size:0.7em;margin:6px 0 0;">SL: ${p["sl"]:.2f} | TP: ${p["tp"]:.2f}</p>
+                    <p style="color:#808495;font-size:0.7em;margin:5px 0 0;">SL: ${p["sl"]:.2f} | TP: ${p["tp"]:.2f}</p>
                 </div>''', unsafe_allow_html=True)
                 
                 if tier['auto'] != 'always' and not st.session_state.auto:
@@ -845,16 +1366,13 @@ def trade():
                         sell(i)
                         st.rerun()
         else:
-            st.info("No open positions")
+            st.info("No positions")
         
-        st.markdown("### 📜 Live Ticker")
-        if st.session_state.ticker:
-            for t in reversed(st.session_state.ticker[-5:]):
-                tc = "b" if t['a'] == 'BUY' else "s"
-                tcol = "#00FFA3" if t['a'] == 'BUY' else "#FF4B4B"
-                st.markdown(f'<div class="tck {tc}"><span style="color:#808495;">{t["t"]}</span> <span style="color:{tcol};font-weight:600;">{t["a"]}</span> <span style="color:white;">{t["s"]} {t["d"]}</span></div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<p style="color:#808495;font-size:0.8em;">Waiting for trades...</p>', unsafe_allow_html=True)
+        st.markdown("### 📜 Ticker")
+        for t in reversed(st.session_state.ticker[-5:]):
+            tc = "b" if t['a'] == 'BUY' else "s"
+            tcol = "#00FFA3" if t['a'] == 'BUY' else "#FF4B4B"
+            st.markdown(f'<div class="tck {tc}"><span style="color:#808495;">{t["t"]}</span> <span style="color:{tcol};font-weight:600;">{t["a"]}</span> <span style="color:white;">{t["s"]}</span></div>', unsafe_allow_html=True)
 
 def history():
     st.markdown('<div class="logo"><span>🌱</span><span>PROJECT HOPE</span></div>', unsafe_allow_html=True)
@@ -889,24 +1407,23 @@ def history():
     with c4:
         st.markdown(f'<div class="card stat"><p class="v" style="color:#FF4B4B;">{st.session_state.losses}</p><p class="l">Losses</p></div>', unsafe_allow_html=True)
     
-    st.markdown("### 📜 Trade History")
+    st.markdown("### Recent Trades")
     if st.session_state.trades:
-        for t in reversed(st.session_state.trades[-15:]):
+        for t in reversed(st.session_state.trades[-10:]):
             c = "#00FFA3" if t['pnl'] >= 0 else "#FF4B4B"
             st.markdown(f'''<div class="card" style="border-left:3px solid {c};padding:12px;">
                 <div style="display:flex;justify-content:space-between;">
                     <div>
-                        <p style="color:#808495;font-size:0.8em;margin:0;">{t.get("d","")} {t["t"]}</p>
-                        <h4 style="color:white;margin:6px 0 0;">{t["sym"]} {t.get("dir","")}</h4>
+                        <p style="color:#808495;font-size:0.8em;margin:0;">{t.get("d", "")} {t["t"]}</p>
+                        <h4 style="color:white;margin:6px 0 0;">{t["sym"]} {t.get("dir", "")} | {t.get("setup", "N/A")}</h4>
                     </div>
                     <h3 style="color:{c};margin:0;">${t["pnl"]:+.2f}</h3>
                 </div>
             </div>''', unsafe_allow_html=True)
     else:
-        st.info("No trades yet - start trading to build your history!")
+        st.info("No trades yet")
     
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("🔄 Reset All Stats", use_container_width=True):
+    if st.button("🔄 Reset Stats", use_container_width=True):
         st.session_state.bal = st.session_state.start
         st.session_state.pos = []
         st.session_state.trades = []
@@ -917,6 +1434,8 @@ def history():
         st.session_state.wins = 0
         st.session_state.losses = 0
         st.session_state.locked = False
+        st.session_state.last_loss_time = None
+        st.session_state.setups_pending = {}
         st.rerun()
 
 def learn():
@@ -938,37 +1457,52 @@ def learn():
     with c4:
         st.button("Learn", disabled=True, use_container_width=True)
     
-    st.markdown("### 📚 Options 101")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown('<div class="card" style="border-left:4px solid #00FFA3;"><h4 style="color:#00FFA3;margin:0;">📈 CALL Option</h4><p style="color:white;margin:8px 0 0;">You profit when stock goes UP</p><p style="color:#808495;margin:8px 0 0;font-size:0.85em;">Buy calls when you\'re bullish</p></div>', unsafe_allow_html=True)
-    with c2:
-        st.markdown('<div class="card" style="border-left:4px solid #FF4B4B;"><h4 style="color:#FF4B4B;margin:0;">📉 PUT Option</h4><p style="color:white;margin:8px 0 0;">You profit when stock goes DOWN</p><p style="color:#808495;margin:8px 0 0;font-size:0.85em;">Buy puts when you\'re bearish</p></div>', unsafe_allow_html=True)
+    st.markdown("### 🎯 The 4 A+ Setups")
     
-    st.markdown("### 🔬 Our 6 Indicators")
-    indicators = [
-        ("RSI", "Relative Strength Index - Oversold (<30) = Buy, Overbought (>70) = Sell", "#00FFA3"),
-        ("EMA", "Exponential Moving Average - 9/21 crossover signals trend changes", "#00E5FF"),
-        ("VWAP", "Volume Weighted Average Price - Where institutions are buying/selling", "#FFD700"),
-        ("S/R", "Support & Resistance - Key levels where price bounces or breaks", "#A855F7"),
-        ("VOL", "Volume Spikes - Confirms if moves are real or fake", "#FF6B6B"),
-        ("NEWS", "News Sentiment - Blocks bad news, boosts good catalysts", "#FF0080")
+    setups_info = [
+        ("ORB", "Opening Range Breakout", "Price breaks above/below the first 5-15 minute range with volume confirmation", "#00FFA3"),
+        ("VWAP", "VWAP Reclaim/Rejection", "Price reclaims VWAP and holds (long) or rejects VWAP and fails (short)", "#00E5FF"),
+        ("PULLBACK", "Trend Pullback", "Strong trend pulls back to 9/20 EMA, then continues", "#FFD700"),
+        ("RETEST", "Break & Retest", "Key level breaks, retests, and holds - then entry", "#A855F7")
     ]
     
-    for n, d, c in indicators:
-        st.markdown(f'<div class="card" style="border-left:4px solid {c};padding:12px;"><h4 style="color:{c};margin:0 0 6px;">{n}</h4><p style="color:#c0c0c0;margin:0;font-size:0.85em;">{d}</p></div>', unsafe_allow_html=True)
+    for name, title, desc, color in setups_info:
+        st.markdown(f'''<div class="card" style="border-left:4px solid {color};padding:14px;">
+            <h4 style="color:{color};margin:0 0 8px;">{name} - {title}</h4>
+            <p style="color:#c0c0c0;margin:0;font-size:0.9em;">{desc}</p>
+        </div>''', unsafe_allow_html=True)
     
-    st.markdown("### 🛡️ Protection System")
+    st.markdown("### ⏰ Trading Windows")
+    st.markdown('''<div class="card">
+        <p style="color:#00FFA3;font-weight:600;margin:0;">🟢 9:30 - 10:30 AM ET (Opening)</p>
+        <p style="color:#FF4B4B;margin:8px 0;">🔴 10:30 - 3:00 PM ET (Chop Zone - NO TRADES)</p>
+        <p style="color:#00FFA3;font-weight:600;margin:0;">🟢 3:00 - 3:55 PM ET (Power Hour)</p>
+    </div>''', unsafe_allow_html=True)
+    
+    st.markdown("### 📊 Confirmation Required")
+    st.markdown('''<div class="card">
+        <p style="color:white;margin:0;">Every trade must be <strong>confirmed</strong> before entry:</p>
+        <p style="color:#808495;margin:8px 0 0;">1. Setup detected → Wait</p>
+        <p style="color:#808495;margin:4px 0 0;">2. Price must hold level for 3 checks (15 seconds)</p>
+        <p style="color:#808495;margin:4px 0 0;">3. Volume must confirm (RVOL ≥ 1.5x)</p>
+        <p style="color:#00FFA3;margin:4px 0 0;font-weight:600;">4. THEN execute</p>
+    </div>''', unsafe_allow_html=True)
+    
+    st.markdown("### 🛡️ Protection Rules")
     protections = [
-        ("Stop Loss -25%", "Auto-sells if trade drops 25% from entry", "#FF4B4B"),
-        ("Take Profit +30%", "Auto-sells if trade gains 30% from entry", "#00FFA3"),
-        ("Daily Limit -15%", "Locks ALL trading if you lose 15% in one day", "#FFA500"),
-        ("Max Position 5%", "No single trade can risk more than 5% of account", "#00E5FF"),
-        ("News Filter", "Blocks trades on stocks with lawsuits, fraud, SEC issues", "#FF0080")
+        ("Stop Loss -25%", "Auto-exits if trade drops 25%"),
+        ("Take Profit +30%", "Auto-exits if trade gains 30%"),
+        ("Daily Max -15%", "Locks trading if down 15% for day"),
+        ("10min Cooldown", "After every loss, 10 minute cooldown"),
+        ("HOT Score 70+", "Only trades stocks with high quality score"),
+        ("No CHOP", "Won't trade in choppy markets")
     ]
     
-    for n, d, c in protections:
-        st.markdown(f'<div class="card" style="border-left:4px solid {c};padding:12px;"><h4 style="color:{c};margin:0 0 6px;">{n}</h4><p style="color:#c0c0c0;margin:0;font-size:0.85em;">{d}</p></div>', unsafe_allow_html=True)
+    for name, desc in protections:
+        st.markdown(f'''<div class="card" style="padding:10px;">
+            <strong style="color:#00FFA3;">{name}</strong>
+            <span style="color:#808495;"> - {desc}</span>
+        </div>''', unsafe_allow_html=True)
 
 # =============================================================================
 # MAIN
