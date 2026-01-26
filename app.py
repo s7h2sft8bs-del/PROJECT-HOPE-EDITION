@@ -32,7 +32,7 @@ EMAIL = "thetradingprotocol@gmail.com"
 # =============================================================================
 # PROFESSIONAL TRADING SETTINGS
 # =============================================================================
-STOP_LOSS = 0.25              # -25% stop loss
+STOP_LOSS = 0.25              # -25% stop loss (option premium)
 TAKE_PROFIT = 0.30            # +30% take profit  
 DAILY_LIMIT = 0.15            # -15% daily max loss
 MAX_POS = 0.05                # 5% max per trade
@@ -40,6 +40,7 @@ COOLDOWN_AFTER_LOSS = 600     # 10 minutes cooldown after loss (seconds)
 MIN_RVOL = 1.5                # Minimum relative volume
 MIN_HOLD_CHECKS = 3           # Must hold level for 3 checks (15 sec)
 MIN_SETUP_SCORE = 70          # HOT score minimum for trade
+MIN_CONFIDENCE = 70           # Setup confidence minimum
 
 # PROFESSIONAL PROFIT MANAGEMENT
 PARTIAL_PROFIT_1 = 0.15       # Take 50% profit at +15%
@@ -64,9 +65,22 @@ TIERS = {
 }
 
 # =============================================================================
-# WATCHLIST
+# WATCHLIST - EXPANDED UNIVERSE
 # =============================================================================
-STOCKS = [
+# Core watchlist - high volume, options-friendly stocks
+STOCKS_CORE = [
+    # Tech & Growth
+    {"s": "AAPL", "n": "Apple", "p": 185.00},
+    {"s": "MSFT", "n": "Microsoft", "p": 420.00},
+    {"s": "NVDA", "n": "NVIDIA", "p": 875.00},
+    {"s": "AMD", "n": "AMD", "p": 175.00},
+    {"s": "TSLA", "n": "Tesla", "p": 175.00},
+    {"s": "META", "n": "Meta", "p": 500.00},
+    {"s": "GOOGL", "n": "Google", "p": 175.00},
+    {"s": "AMZN", "n": "Amazon", "p": 185.00},
+    {"s": "NFLX", "n": "Netflix", "p": 620.00},
+    
+    # Retail Favorites (High Volume, Volatile)
     {"s": "SOFI", "n": "SoFi Technologies", "p": 14.50},
     {"s": "PLTR", "n": "Palantir", "p": 78.00},
     {"s": "NIO", "n": "NIO Inc", "p": 4.85},
@@ -77,12 +91,100 @@ STOCKS = [
     {"s": "MARA", "n": "Marathon Digital", "p": 18.75},
     {"s": "RIOT", "n": "Riot Platforms", "p": 12.40},
     {"s": "LCID", "n": "Lucid Motors", "p": 2.80},
-    {"s": "F", "n": "Ford", "p": 10.25},
+    {"s": "AMC", "n": "AMC Entertainment", "p": 3.20},
+    
+    # ETFs for Market Direction
+    {"s": "SPY", "n": "S&P 500 ETF", "p": 520.00},
+    {"s": "QQQ", "n": "Nasdaq ETF", "p": 450.00},
+    {"s": "IWM", "n": "Russell 2000 ETF", "p": 210.00},
+    
+    # Financials
+    {"s": "JPM", "n": "JPMorgan", "p": 195.00},
+    {"s": "BAC", "n": "Bank of America", "p": 38.00},
+    {"s": "C", "n": "Citigroup", "p": 58.00},
+    
+    # Energy
+    {"s": "XOM", "n": "ExxonMobil", "p": 105.00},
+    {"s": "CVX", "n": "Chevron", "p": 155.00},
+    
+    # Airlines & Travel
     {"s": "AAL", "n": "American Airlines", "p": 17.80},
-    {"s": "PLUG", "n": "Plug Power", "p": 2.15},
-    {"s": "BB", "n": "BlackBerry", "p": 2.45},
-    {"s": "AMC", "n": "AMC Entertainment", "p": 3.20}
+    {"s": "UAL", "n": "United Airlines", "p": 52.00},
+    {"s": "DAL", "n": "Delta Airlines", "p": 48.00},
+    
+    # Other High Volume
+    {"s": "F", "n": "Ford", "p": 10.25},
+    {"s": "GM", "n": "General Motors", "p": 45.00},
+    {"s": "BA", "n": "Boeing", "p": 185.00},
+    {"s": "DIS", "n": "Disney", "p": 110.00},
+    {"s": "PYPL", "n": "PayPal", "p": 62.00},
+    {"s": "SQ", "n": "Block/Square", "p": 78.00},
+    {"s": "ROKU", "n": "Roku", "p": 65.00},
+    {"s": "UBER", "n": "Uber", "p": 78.00},
+    {"s": "LYFT", "n": "Lyft", "p": 18.00},
 ]
+
+# Dynamic list - will be populated by premarket scanner
+STOCKS_PREMARKET_HOT = []
+
+# Combined active list
+STOCKS = STOCKS_CORE.copy()
+
+def get_premarket_movers():
+    """
+    Scan for pre-market movers - stocks gapping up/down with volume
+    
+    RUNS: 8:00 AM - 9:29 AM ET (peak pre-market activity)
+    FINDS: Stocks gapping 2%+ from previous close
+    PURPOSE: Identify today's potential hot stocks before market opens
+    """
+    global STOCKS_PREMARKET_HOT
+    
+    movers = []
+    
+    # Check each core stock for premarket activity
+    for stk in STOCKS_CORE[:20]:  # Check top 20 to save API calls
+        try:
+            # Get latest quote (includes premarket)
+            r = requests.get(f"{DATA_URL}/v2/stocks/{stk['s']}/quotes/latest", 
+                           headers=headers(), timeout=3)
+            if r.status_code == 200:
+                data = r.json()
+                if 'quote' in data:
+                    current = float(data['quote'].get('ap', 0) or data['quote'].get('bp', 0))
+                    if current > 0:
+                        # Calculate gap from previous close
+                        prev_close = stk['p']
+                        gap_pct = ((current - prev_close) / prev_close) * 100
+                        
+                        # If gapping more than 2%, it's potentially hot
+                        if abs(gap_pct) >= 2.0:
+                            movers.append({
+                                's': stk['s'],
+                                'n': stk['n'],
+                                'p': current,
+                                'gap': round(gap_pct, 2),
+                                'direction': 'UP' if gap_pct > 0 else 'DOWN'
+                            })
+        except:
+            continue
+    
+    # Sort by gap size (absolute)
+    movers.sort(key=lambda x: abs(x['gap']), reverse=True)
+    STOCKS_PREMARKET_HOT = movers[:10]  # Top 10 movers
+    
+    return movers
+
+def get_active_watchlist():
+    """Get the active watchlist based on tier and premarket scan"""
+    # Combine core + any premarket movers not already in core
+    active = STOCKS_CORE.copy()
+    
+    for mover in STOCKS_PREMARKET_HOT:
+        if not any(s['s'] == mover['s'] for s in active):
+            active.append(mover)
+    
+    return active
 
 BIO = """I'm Stephen Martinez, an Amazon warehouse worker from Lancaster, PA.
 
@@ -201,6 +303,9 @@ defs = {
     'candle_history': {},             # Store candle data
     'opening_range': {},              # 5min/15min opening range
     'or_calculated': False,           # Opening range calculated flag
+    # PREMARKET SCANNER
+    'premarket_scanned': False,       # Have we scanned premarket today?
+    'premarket_movers': [],           # Today's premarket movers
     # SETUP PERFORMANCE TRACKING
     'setup_stats': {
         'ORB': {'wins': 0, 'losses': 0, 'total_pnl': 0},
@@ -225,6 +330,19 @@ if st.session_state.date != datetime.now().strftime('%Y-%m-%d'):
     st.session_state.or_calculated = False
     st.session_state.opening_range = {}
     st.session_state.vwap_crosses = 0
+    st.session_state.premarket_scanned = False
+    st.session_state.premarket_movers = []
+
+# Run premarket scan once per day (between 8:00 AM - 9:29 AM ET - peak premarket)
+now_et = datetime.now(pytz.timezone('US/Eastern'))
+is_premarket = (now_et.hour == 8) or (now_et.hour == 9 and now_et.minute < 30)
+if not st.session_state.premarket_scanned and is_premarket:
+    try:
+        movers = get_premarket_movers()
+        st.session_state.premarket_movers = movers
+        st.session_state.premarket_scanned = True
+    except:
+        pass
 
 # Get Alpaca account
 acct = get_acct()
@@ -461,6 +579,8 @@ def detect_setups(sym, price, prices, volumes, levels, or_levels, rvol, regime):
     """
     Detect which A+ setup is forming (if any)
     Returns: setup_type, direction, entry, stop, confidence
+    
+    CRITICAL: All stops are set at INVALIDATION levels with proper buffer
     """
     setups = []
     
@@ -471,8 +591,18 @@ def detect_setups(sym, price, prices, volumes, levels, or_levels, rvol, regime):
     e9 = ema(prices, 9)
     e21 = ema(prices, 21)
     
+    # ATR-like volatility measure for dynamic stops (using recent range)
+    recent_high = max(prices[-10:])
+    recent_low = min(prices[-10:])
+    atr_proxy = (recent_high - recent_low) / 10  # Average range per bar
+    min_stop_distance = max(price * 0.01, atr_proxy * 1.5)  # At least 1% or 1.5 ATR
+    
     # Get last few prices for pattern detection
     p1, p2, p3 = prices[-1], prices[-2] if len(prices) > 1 else prices[-1], prices[-3] if len(prices) > 2 else prices[-1]
+    
+    # Momentum check (simple: are we moving in the right direction?)
+    momentum_up = p1 > p2 > p3
+    momentum_down = p1 < p2 < p3
     
     # ===================
     # SETUP A: ORB (Opening Range Breakout)
@@ -480,95 +610,117 @@ def detect_setups(sym, price, prices, volumes, levels, or_levels, rvol, regime):
     if or_levels and regime != 'CHOP':
         or_high = or_levels.get('5m_high', 0)
         or_low = or_levels.get('5m_low', 0)
+        or_range = or_high - or_low if or_high and or_low else 0
         
-        # Breakout above OR high
-        if or_high and price > or_high and p2 <= or_high and rvol >= MIN_RVOL:
-            setups.append({
-                'type': 'ORB',
-                'direction': 'LONG',
-                'trigger_price': or_high,
-                'entry': price,
-                'stop': or_low,
-                'target1': price + (price - or_low),
-                'target2': price + 2 * (price - or_low),
-                'confidence': 80 if rvol >= 2.0 else 70
-            })
+        # Breakout above OR high with momentum
+        if or_high and or_low and price > or_high and p2 <= or_high * 1.002 and rvol >= MIN_RVOL:
+            # Stop is below OR low with buffer (proper invalidation)
+            stop = or_low - (or_range * 0.1)  # 10% of range below OR low
+            if price - stop >= min_stop_distance:  # Ensure minimum stop distance
+                setups.append({
+                    'type': 'ORB',
+                    'direction': 'LONG',
+                    'trigger_price': or_high,
+                    'entry': price,
+                    'stop': round(stop, 2),
+                    'target1': round(price + or_range, 2),  # 1R = OR range
+                    'target2': round(price + (or_range * 2), 2),  # 2R
+                    'confidence': 85 if rvol >= 2.0 and momentum_up else 70
+                })
         
-        # Breakdown below OR low
-        if or_low and price < or_low and p2 >= or_low and rvol >= MIN_RVOL:
-            setups.append({
-                'type': 'ORB',
-                'direction': 'SHORT',
-                'trigger_price': or_low,
-                'entry': price,
-                'stop': or_high,
-                'target1': price - (or_high - price),
-                'target2': price - 2 * (or_high - price),
-                'confidence': 80 if rvol >= 2.0 else 70
-            })
+        # Breakdown below OR low with momentum
+        if or_high and or_low and price < or_low and p2 >= or_low * 0.998 and rvol >= MIN_RVOL:
+            stop = or_high + (or_range * 0.1)
+            if stop - price >= min_stop_distance:
+                setups.append({
+                    'type': 'ORB',
+                    'direction': 'SHORT',
+                    'trigger_price': or_low,
+                    'entry': price,
+                    'stop': round(stop, 2),
+                    'target1': round(price - or_range, 2),
+                    'target2': round(price - (or_range * 2), 2),
+                    'confidence': 85 if rvol >= 2.0 and momentum_down else 70
+                })
     
     # ===================
     # SETUP B: VWAP Reclaim/Rejection
     # ===================
-    vwap_buffer = vwap * 0.002  # 0.2% buffer
+    vwap_buffer = max(vwap * 0.005, 0.05)  # 0.5% or $0.05 minimum
     
     # VWAP Reclaim (Long) - was below, now above and holding
+    # Need 2 bars below VWAP, then break above with conviction
     if p3 < vwap and p2 < vwap and price > vwap + vwap_buffer:
-        setups.append({
-            'type': 'VWAP_RECLAIM',
-            'direction': 'LONG',
-            'trigger_price': vwap,
-            'entry': price,
-            'stop': vwap - vwap_buffer * 2,
-            'target1': levels.get('resistance', price * 1.01),
-            'target2': levels.get('pd_high', price * 1.02),
-            'confidence': 75 if rvol >= 1.5 else 65
-        })
+        # Stop below the swing low before the reclaim
+        swing_low = min(prices[-5:])
+        stop = swing_low - (price * 0.005)  # Swing low minus buffer
+        if price - stop >= min_stop_distance:
+            setups.append({
+                'type': 'VWAP_RECLAIM',
+                'direction': 'LONG',
+                'trigger_price': vwap,
+                'entry': price,
+                'stop': round(stop, 2),
+                'target1': round(levels.get('resistance', price * 1.015), 2),
+                'target2': round(levels.get('pd_high', price * 1.025), 2),
+                'confidence': 80 if rvol >= 1.5 and momentum_up else 65
+            })
     
     # VWAP Rejection (Short) - tested VWAP from below and failed
-    if p3 < vwap and p2 > vwap - vwap_buffer and p2 < vwap + vwap_buffer and price < vwap - vwap_buffer:
-        setups.append({
-            'type': 'VWAP_REJECT',
-            'direction': 'SHORT',
-            'trigger_price': vwap,
-            'entry': price,
-            'stop': vwap + vwap_buffer * 2,
-            'target1': levels.get('support', price * 0.99),
-            'target2': levels.get('pd_low', price * 0.98),
-            'confidence': 75 if rvol >= 1.5 else 65
-        })
+    if p3 < vwap and abs(p2 - vwap) < vwap_buffer * 2 and price < vwap - vwap_buffer:
+        swing_high = max(prices[-5:])
+        stop = swing_high + (price * 0.005)
+        if stop - price >= min_stop_distance:
+            setups.append({
+                'type': 'VWAP_REJECT',
+                'direction': 'SHORT',
+                'trigger_price': vwap,
+                'entry': price,
+                'stop': round(stop, 2),
+                'target1': round(levels.get('support', price * 0.985), 2),
+                'target2': round(levels.get('pd_low', price * 0.975), 2),
+                'confidence': 80 if rvol >= 1.5 and momentum_down else 65
+            })
     
     # ===================
     # SETUP C: Pullback Continuation
     # ===================
+    # Wider zone for pullback detection (within 1% of 9 EMA)
+    ema_zone = e9 * 0.01
+    
     # Bullish trend pullback to 9 EMA
     if regime == 'TREND' and price > e21 and e9 > e21:
-        # Price pulled back to 9 EMA and bouncing
-        if p2 <= e9 * 1.002 and p2 >= e9 * 0.998 and price > p2:
-            setups.append({
-                'type': 'PULLBACK',
-                'direction': 'LONG',
-                'trigger_price': e9,
-                'entry': price,
-                'stop': e21,
-                'target1': levels.get('resistance', price * 1.015),
-                'target2': levels.get('pd_high', price * 1.025),
-                'confidence': 80 if regime == 'TREND' else 60
-            })
+        # Price pulled back near 9 EMA (within 1% zone) and now bouncing
+        if p2 <= e9 + ema_zone and p2 >= e9 - ema_zone and price > p2 and price > e9:
+            # Stop below 21 EMA with buffer
+            stop = e21 - (e21 * 0.005)
+            if price - stop >= min_stop_distance:
+                setups.append({
+                    'type': 'PULLBACK',
+                    'direction': 'LONG',
+                    'trigger_price': round(e9, 2),
+                    'entry': price,
+                    'stop': round(stop, 2),
+                    'target1': round(levels.get('resistance', price * 1.02), 2),
+                    'target2': round(levels.get('pd_high', price * 1.03), 2),
+                    'confidence': 85 if regime == 'TREND' and momentum_up else 65
+                })
     
     # Bearish trend pullback to 9 EMA
     if regime == 'TREND' and price < e21 and e9 < e21:
-        if p2 >= e9 * 0.998 and p2 <= e9 * 1.002 and price < p2:
-            setups.append({
-                'type': 'PULLBACK',
-                'direction': 'SHORT',
-                'trigger_price': e9,
-                'entry': price,
-                'stop': e21,
-                'target1': levels.get('support', price * 0.985),
-                'target2': levels.get('pd_low', price * 0.975),
-                'confidence': 80 if regime == 'TREND' else 60
-            })
+        if p2 >= e9 - ema_zone and p2 <= e9 + ema_zone and price < p2 and price < e9:
+            stop = e21 + (e21 * 0.005)
+            if stop - price >= min_stop_distance:
+                setups.append({
+                    'type': 'PULLBACK',
+                    'direction': 'SHORT',
+                    'trigger_price': round(e9, 2),
+                    'entry': price,
+                    'stop': round(stop, 2),
+                    'target1': round(levels.get('support', price * 0.98), 2),
+                    'target2': round(levels.get('pd_low', price * 0.97), 2),
+                    'confidence': 85 if regime == 'TREND' and momentum_down else 65
+                })
     
     # ===================
     # SETUP D: Break & Retest
@@ -576,39 +728,46 @@ def detect_setups(sym, price, prices, volumes, levels, or_levels, rvol, regime):
     key_levels = [
         levels.get('pd_high'), levels.get('pd_low'),
         levels.get('pm_high'), levels.get('pm_low'),
-        levels.get('whole'), levels.get('half_up'), levels.get('half_down')
+        levels.get('whole')
     ]
     
     for lvl in key_levels:
-        if lvl is None:
+        if lvl is None or lvl <= 0:
             continue
-        lvl_buffer = lvl * 0.002
         
-        # Break above and retest holding
-        if p3 < lvl and p2 > lvl and abs(price - lvl) < lvl_buffer and price > lvl:
-            setups.append({
-                'type': 'BREAK_RETEST',
-                'direction': 'LONG',
-                'trigger_price': lvl,
-                'entry': price,
-                'stop': lvl - lvl_buffer * 3,
-                'target1': price + (price - (lvl - lvl_buffer * 3)),
-                'target2': price + 2 * (price - (lvl - lvl_buffer * 3)),
-                'confidence': 70
-            })
+        # Retest zone is 0.5% around level
+        retest_zone = lvl * 0.005
         
-        # Break below and retest holding
-        if p3 > lvl and p2 < lvl and abs(price - lvl) < lvl_buffer and price < lvl:
-            setups.append({
-                'type': 'BREAK_RETEST',
-                'direction': 'SHORT',
-                'trigger_price': lvl,
-                'entry': price,
-                'stop': lvl + lvl_buffer * 3,
-                'target1': price - ((lvl + lvl_buffer * 3) - price),
-                'target2': price - 2 * ((lvl + lvl_buffer * 3) - price),
-                'confidence': 70
-            })
+        # Break above and now retesting (price came back to level and holding)
+        if p3 < lvl and p2 > lvl and abs(price - lvl) <= retest_zone and price > lvl:
+            # Stop below the retest low
+            stop = lvl - (lvl * 0.01)  # 1% below level
+            if price - stop >= min_stop_distance:
+                setups.append({
+                    'type': 'BREAK_RETEST',
+                    'direction': 'LONG',
+                    'trigger_price': lvl,
+                    'entry': price,
+                    'stop': round(stop, 2),
+                    'target1': round(price + (price - stop), 2),  # 1R
+                    'target2': round(price + 2 * (price - stop), 2),  # 2R
+                    'confidence': 75 if momentum_up else 60
+                })
+        
+        # Break below and now retesting (price came back to level and rejecting)
+        if p3 > lvl and p2 < lvl and abs(price - lvl) <= retest_zone and price < lvl:
+            stop = lvl + (lvl * 0.01)
+            if stop - price >= min_stop_distance:
+                setups.append({
+                    'type': 'BREAK_RETEST',
+                    'direction': 'SHORT',
+                    'trigger_price': lvl,
+                    'entry': price,
+                    'stop': round(stop, 2),
+                    'target1': round(price - (stop - price), 2),
+                    'target2': round(price - 2 * (stop - price), 2),
+                    'confidence': 75 if momentum_down else 60
+                })
     
     return setups
 
@@ -619,6 +778,7 @@ def check_confirmation(sym, setup):
     """
     Check if a setup has been confirmed
     Must hold for MIN_HOLD_CHECKS (3 checks = 15 seconds)
+    ALSO checks that price is stable (not just spiking and reversing)
     """
     pending = st.session_state.setups_pending
     setup_key = f"{sym}_{setup['type']}_{setup['direction']}"
@@ -629,7 +789,9 @@ def check_confirmation(sym, setup):
             'setup': setup,
             'checks': 1,
             'first_seen': datetime.now(),
-            'prices': [setup['entry']]
+            'prices': [setup['entry']],
+            'high': setup['entry'],
+            'low': setup['entry']
         }
         return False, "CONFIRMING (1/3)"
     
@@ -637,27 +799,46 @@ def check_confirmation(sym, setup):
     tracked = pending[setup_key]
     tracked['checks'] += 1
     tracked['prices'].append(setup['entry'])
+    tracked['high'] = max(tracked['high'], setup['entry'])
+    tracked['low'] = min(tracked['low'], setup['entry'])
     
     # Check if price is holding (not whipsawing back)
     direction = setup['direction']
     trigger = setup['trigger_price']
     current = setup['entry']
+    stop = setup['stop']
     
-    if direction == 'LONG' and current < trigger:
-        # Failed - price went back below trigger
-        del pending[setup_key]
-        return False, "FAILED - Price reversed"
+    # LONG: Price must stay above trigger
+    if direction == 'LONG':
+        if current < trigger * 0.998:  # Allow 0.2% buffer
+            del pending[setup_key]
+            return False, "FAILED - Price reversed"
+        # Also fail if we've already touched stop area
+        if tracked['low'] <= stop * 1.01:
+            del pending[setup_key]
+            return False, "FAILED - Hit stop zone"
     
-    if direction == 'SHORT' and current > trigger:
-        # Failed - price went back above trigger
+    # SHORT: Price must stay below trigger
+    if direction == 'SHORT':
+        if current > trigger * 1.002:
+            del pending[setup_key]
+            return False, "FAILED - Price reversed"
+        if tracked['high'] >= stop * 0.99:
+            del pending[setup_key]
+            return False, "FAILED - Hit stop zone"
+    
+    # Check price stability (range shouldn't be too wild)
+    price_range = tracked['high'] - tracked['low']
+    avg_price = sum(tracked['prices']) / len(tracked['prices'])
+    if price_range > avg_price * 0.02:  # More than 2% range during confirmation = unstable
         del pending[setup_key]
-        return False, "FAILED - Price reversed"
+        return False, "FAILED - Too volatile"
     
     # Check if enough confirmations
     if tracked['checks'] >= MIN_HOLD_CHECKS:
         # CONFIRMED! Clean up and return True
         del pending[setup_key]
-        return True, "CONFIRMED"
+        return True, "CONFIRMED ✓"
     
     return False, f"CONFIRMING ({tracked['checks']}/{MIN_HOLD_CHECKS})"
 
@@ -874,6 +1055,16 @@ def analyze_stock(stk):
     max_cost = (st.session_state.bal * MAX_POS) / 100
     oc = min(max(5, round(price * 0.03 * random.uniform(0.8, 1.2), 2)), max_cost, 80)
     
+    # Use setup's calculated stop if available, otherwise use percentage-based
+    if best_setup and best_setup.get('stop'):
+        # Calculate what % the setup's stop represents
+        setup_stop_pct = abs(best_setup['stop'] - price) / price
+        # Convert to option premium stop (options move ~2-3x stock)
+        option_stop_pct = min(setup_stop_pct * 2.5, STOP_LOSS)  # Cap at max stop loss
+        sl = round(oc * (1 - option_stop_pct), 2)
+    else:
+        sl = round(oc * (1 - STOP_LOSS), 2)
+    
     return {
         'sym': sym,
         'name': stk['n'],
@@ -881,7 +1072,7 @@ def analyze_stock(stk):
         'chg': round(price - prices[-2] if len(prices) > 1 else 0, 2),
         'sigs': sigs,
         'oc': oc,
-        'sl': round(oc * (1 - STOP_LOSS), 2),
+        'sl': sl,
         'tp': round(oc * (1 + TAKE_PROFIT), 2),
         'news': news,
         'blk': news['block'],
@@ -896,8 +1087,23 @@ def analyze_stock(stk):
     }
 
 def scan():
-    """Scan all stocks and sort by HOT score"""
-    results = [analyze_stock(s) for s in STOCKS]
+    """Scan all stocks and sort by HOT score - includes premarket movers"""
+    # Get active watchlist (core + premarket movers)
+    watchlist = get_active_watchlist()
+    
+    # Analyze each stock
+    results = []
+    for s in watchlist:
+        try:
+            result = analyze_stock(s)
+            # Add premarket gap info if available
+            if s.get('gap'):
+                result['premarket_gap'] = s['gap']
+            results.append(result)
+        except:
+            continue
+    
+    # Sort by HOT score
     return sorted(results, key=lambda x: x['hot_score'], reverse=True)
 
 # =============================================================================
@@ -1048,7 +1254,7 @@ def hit_limit():
     return st.session_state.locked
 
 def can_buy(stk):
-    """Check all conditions before allowing a trade"""
+    """Check all conditions before allowing a trade - PROFESSIONAL GATES"""
     tier = TIERS[st.session_state.tier]
     
     # News block
@@ -1092,6 +1298,14 @@ def can_buy(stk):
     # Regime check - no trades in CHOP
     if stk['regime'] == 'CHOP':
         return False, "CHOP regime - no trades"
+    
+    # Setup confidence check
+    if stk.get('best_setup'):
+        confidence = stk['best_setup'].get('confidence', 0)
+        if confidence < MIN_CONFIDENCE:
+            return False, f"Confidence {confidence}% < {MIN_CONFIDENCE}%"
+    else:
+        return False, "No valid setup"
     
     return True, "OK"
 
@@ -1338,16 +1552,27 @@ def home():
     window_text = "🟢 TRADING WINDOW" if in_window else "🔴 OUTSIDE WINDOW"
     st.markdown(f'<div class="clk {status}"><p style="color:#808495;margin:0;font-size:0.85em;">{ct}</p><p style="font-size:1.3em;font-weight:800;color:#00E5FF;margin:6px 0 0;font-family:monospace;">{cd}</p><p style="font-size:0.8em;margin:4px 0 0;">{window_text}</p></div>', unsafe_allow_html=True)
     
+    # Premarket Movers Display
+    if st.session_state.premarket_movers:
+        st.markdown("### 🔥 Pre-Market Movers")
+        movers_html = '<div style="display:flex;flex-wrap:wrap;gap:10px;margin:10px 0;">'
+        for m in st.session_state.premarket_movers[:5]:
+            color = "#00FFA3" if m['gap'] > 0 else "#FF4B4B"
+            arrow = "↑" if m['gap'] > 0 else "↓"
+            movers_html += f'<div style="background:rgba(255,255,255,0.05);padding:10px 15px;border-radius:10px;border:1px solid {color}40;"><span style="color:white;font-weight:700;">{m["s"]}</span> <span style="color:{color};font-weight:600;">{arrow}{abs(m["gap"])}%</span></div>'
+        movers_html += '</div>'
+        st.markdown(movers_html, unsafe_allow_html=True)
+    
     st.markdown("### 🎯 Professional Trading Logic")
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown('<div class="card stat"><p class="v" style="color:#00FFA3;">4</p><p class="l">A+ Setups</p></div>', unsafe_allow_html=True)
     with c2:
-        st.markdown('<div class="card stat"><p class="v" style="color:#FFD700;">3x</p><p class="l">Confirm</p></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="card stat"><p class="v" style="color:#FFD700;">{len(STOCKS_CORE)}+</p><p class="l">Stocks</p></div>', unsafe_allow_html=True)
     with c3:
         st.markdown('<div class="card stat"><p class="v" style="color:#00E5FF;">2</p><p class="l">Windows</p></div>', unsafe_allow_html=True)
     with c4:
-        st.markdown('<div class="card stat"><p class="v" style="color:#A855F7;">10m</p><p class="l">Cooldown</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="card stat"><p class="v" style="color:#A855F7;">PM</p><p class="l">Scanner</p></div>', unsafe_allow_html=True)
     
     st.markdown("### 🛡️ 5-Layer Protection")
     c1, c2, c3, c4, c5 = st.columns(5)
