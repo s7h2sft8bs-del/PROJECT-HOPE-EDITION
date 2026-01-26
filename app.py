@@ -12,8 +12,7 @@ import requests
 
 st.set_page_config(page_title="Project Hope", page_icon="🌱", layout="wide", initial_sidebar_state="collapsed")
 
-# Auto-refresh every 5 seconds - with anti-flicker CSS
-st_autorefresh(interval=5000, key="refresh")
+# Auto-refresh moved to trade page only
 
 # =============================================================================
 # ALPACA API
@@ -1615,19 +1614,22 @@ def home():
     st.markdown("### 🔐 Access Code")
     _, c2, _ = st.columns([1, 2, 1])
     with c2:
-        code = st.text_input("Code", type="password", label_visibility="collapsed", placeholder="Enter code...", key="access_code")
-        codes = {"HOPE49": 1, "HOPE99": 2, "HOPE199": 3, "HOPE499": 4, "DEMO": 3}
-        if code:
-            if code.upper() in codes:
-                st.session_state.tier = codes[code.upper()]
-                st.success(f"✓ {TIERS[st.session_state.tier]['name']}")
-                st.rerun()
-            else:
-                st.error("Invalid")
+        # Show button if already logged in
         if st.session_state.tier > 0:
+            st.success(f"✓ {TIERS[st.session_state.tier]['name']} - Ready!")
             if st.button("🚀 Start Trading", type="primary", use_container_width=True):
                 st.session_state.page = 'trade'
                 st.rerun()
+        else:
+            # Show code input
+            code = st.text_input("Code", type="password", label_visibility="collapsed", placeholder="Enter code...", key="access_code")
+            codes = {"HOPE49": 1, "HOPE99": 2, "HOPE199": 3, "HOPE499": 4, "DEMO": 3}
+            if code:
+                if code.upper() in codes:
+                    st.session_state.tier = codes[code.upper()]
+                    st.rerun()
+                else:
+                    st.error("Invalid")
     
     # Footer
     st.markdown(f'<div class="ft"><p style="color:#808495;font-size:0.85em;margin:0;">{NAME} | {EMAIL}</p><p style="color:#666;font-size:0.75em;margin:8px 0 0;">Educational tool only. Not financial advice.</p></div>', unsafe_allow_html=True)
@@ -1652,6 +1654,9 @@ I am **NOT** a financial advisor. I am not a licensed broker, investment advisor
         """)
 
 def trade():
+    # Auto-refresh ONLY on trade page - every 5 seconds
+    st_autorefresh(interval=5000, key="trade_refresh")
+    
     if st.session_state.tier == 0:
         st.warning("Enter code first")
         if st.button("Go Home"):
