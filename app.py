@@ -373,7 +373,6 @@ iframe { background-color: #0d1117 !important; }
 
 /* CRITICAL: Prevent dimming during refresh - THIS FIXES THE FLICKER */
 div[data-stale="true"] { opacity: 1 !important; }
-[data-stale="true"] * { opacity: 1 !important; }
 
 /* Hide loading indicators */
 [data-testid="stStatusWidget"] { display: none !important; }
