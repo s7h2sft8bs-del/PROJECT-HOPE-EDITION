@@ -1636,12 +1636,13 @@ def home():
     st.markdown("### 🔐 Access Code")
     _, c2, _ = st.columns([1, 2, 1])
     with c2:
-        code = st.text_input("Code", type="password", label_visibility="collapsed", placeholder="Enter code...")
+        code = st.text_input("Code", type="password", label_visibility="collapsed", placeholder="Enter code...", key="access_code")
         codes = {"HOPE49": 1, "HOPE99": 2, "HOPE199": 3, "HOPE499": 4, "DEMO": 3}
         if code:
             if code.upper() in codes:
                 st.session_state.tier = codes[code.upper()]
                 st.success(f"✓ {TIERS[st.session_state.tier]['name']}")
+                st.rerun()
             else:
                 st.error("Invalid")
         if st.session_state.tier > 0:
