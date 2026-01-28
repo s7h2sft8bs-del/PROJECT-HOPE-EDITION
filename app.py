@@ -319,6 +319,8 @@ defs = {
     'nc': {},
     # USER LOGIN
     'user_email': None,                # Logged in user's email
+    # LEGAL DISCLAIMER
+    'disclaimer_accepted': False,      # User accepted risk disclaimer
     # PROFESSIONAL ADDITIONS
     'last_loss_time': None,           # For cooldown tracking
     'market_regime': 'UNKNOWN',       # TREND or CHOP
@@ -1588,6 +1590,16 @@ def auto_trade(stks):
 def home():
     st.markdown('<div class="logo"><span>🌱</span><span>PROJECT HOPE</span></div>', unsafe_allow_html=True)
     st.markdown('<p style="text-align:center;color:#00FFA3;font-size:0.95em;font-style:italic;margin:-10px 0 15px;">✝️ "Trust in the LORD with all your heart" - Proverbs 3:5</p>', unsafe_allow_html=True)
+    
+    # LEGAL DISCLAIMER BANNER
+    st.markdown('''<div style="background:rgba(255,165,0,0.1);border:1px solid rgba(255,165,0,0.3);border-radius:10px;padding:12px;margin:10px 0;">
+        <p style="color:#FFA500;font-size:0.75em;margin:0;text-align:center;">
+        ⚠️ <strong>IMPORTANT:</strong> Project Hope is EDUCATIONAL SOFTWARE, not investment advice. 
+        We are NOT a registered investment adviser. Trading involves substantial risk of loss. 
+        Past performance does not guarantee future results. You are solely responsible for your trading decisions.
+        </p>
+    </div>''', unsafe_allow_html=True)
+    
     st.markdown('<div class="hero"><h1>OPTIONS TRADING</h1><p class="sub">Professional Entry Logic</p><p class="tag">4 A+ Setups | Confirmation Required | No Impulse Trades</p></div>', unsafe_allow_html=True)
     
     c1, c2, c3, c4 = st.columns(4)
@@ -1777,6 +1789,53 @@ def trade():
             st.rerun()
         return
     
+    # RISK DISCLAIMER ACKNOWLEDGMENT - MUST ACCEPT BEFORE TRADING
+    if not st.session_state.disclaimer_accepted:
+        st.markdown('<div class="logo"><span>🌱</span><span>PROJECT HOPE</span></div>', unsafe_allow_html=True)
+        st.markdown("## ⚠️ Risk Acknowledgment Required")
+        
+        st.markdown('''<div style="background:rgba(255,75,75,0.1);border:1px solid rgba(255,75,75,0.3);border-radius:12px;padding:20px;margin:15px 0;">
+            <h4 style="color:#FF4B4B;margin:0 0 15px 0;">📜 IMPORTANT LEGAL DISCLAIMER</h4>
+            <p style="color:#ccc;font-size:0.9em;line-height:1.6;">
+            <strong>Project Hope is EDUCATIONAL SOFTWARE and a TRADE ASSISTANT TOOL.</strong><br><br>
+            • Stephen Martinez is NOT a registered investment adviser with the SEC or any state securities authority<br>
+            • This software does NOT provide personalized investment advice<br>
+            • Past performance does NOT guarantee future results<br>
+            • Trading options involves SUBSTANTIAL RISK OF LOSS<br>
+            • You could lose some or ALL of your invested capital<br>
+            • Only trade with money you can afford to lose
+            </p>
+        </div>''', unsafe_allow_html=True)
+        
+        st.markdown('''<div style="background:rgba(0,255,163,0.1);border:1px solid rgba(0,255,163,0.3);border-radius:12px;padding:20px;margin:15px 0;">
+            <h4 style="color:#00FFA3;margin:0 0 15px 0;">🔒 AUTO-PILOT AUTHORIZATION</h4>
+            <p style="color:#ccc;font-size:0.9em;line-height:1.6;">
+            By enabling Auto-Pilot features, you acknowledge:<br><br>
+            • You are connecting YOUR OWN brokerage account<br>
+            • YOU authorize trades to be executed based on signals shown<br>
+            • Project Hope does NOT have discretionary control of your account<br>
+            • YOU can disable Auto-Pilot at ANY time<br>
+            • YOU accept FULL responsibility for all trades executed
+            </p>
+        </div>''', unsafe_allow_html=True)
+        
+        st.markdown("### ✅ I Acknowledge and Accept:")
+        
+        ack1 = st.checkbox("I understand this is EDUCATIONAL SOFTWARE, not investment advice", key="ack1")
+        ack2 = st.checkbox("I understand trading involves SUBSTANTIAL RISK and I could LOSE MONEY", key="ack2")
+        ack3 = st.checkbox("I am trading with money I can AFFORD TO LOSE", key="ack3")
+        ack4 = st.checkbox("I take FULL RESPONSIBILITY for all my trading decisions", key="ack4")
+        ack5 = st.checkbox("I authorize Auto-Pilot to execute trades in MY OWN brokerage account", key="ack5")
+        
+        if ack1 and ack2 and ack3 and ack4 and ack5:
+            if st.button("✅ I AGREE - START TRADING", type="primary", use_container_width=True):
+                st.session_state.disclaimer_accepted = True
+                st.rerun()
+        else:
+            st.warning("Please check all boxes to continue")
+        
+        return
+    
     tier = TIERS[st.session_state.tier]
     
     # Update positions
@@ -1856,7 +1915,74 @@ def trade():
     # Protection shield
     st.markdown(f'<div class="shld"><p style="font-weight:800;color:#00FFA3;margin:0;font-size:1em;">🛡️ PROFESSIONAL PROTECTION</p><p style="color:#808495;margin:4px 0 0;font-size:0.8em;">Partials @ +15%/+25% | Trail Stop | BE @ +10% | Max {tier["trades"]} | Cooldown 10m</p></div>', unsafe_allow_html=True)
     
-    # Main content
+    # POSITIONS DISPLAY FUNCTION - reusable for mobile top + desktop sidebar
+    def show_positions():
+        st.markdown(f"### 📈 Positions ({len(st.session_state.pos)}/{tier['trades']})")
+        
+        if st.session_state.pos:
+            for i, p in enumerate(st.session_state.pos):
+                pc = "#00FFA3" if p['pnl'] >= 0 else "#FF4B4B"
+                
+                # Position status indicators
+                qty = p.get('qty', 100)
+                p1 = "✅" if p.get('partial_1_taken') else "⬜"
+                p2 = "✅" if p.get('partial_2_taken') else "⬜"
+                be_status = "🔒BE" if p.get('stop_at_breakeven') else ""
+                
+                # Per-trade manual mode
+                is_manual = p.get('manual_mode', False)
+                mode_icon = "🖐️" if is_manual else "🤖"
+                mode_text = "MANUAL" if is_manual else "AUTO"
+                mode_color = "#FFA500" if is_manual else "#00FFA3"
+                
+                st.markdown(f'''<div class="pcard" style="border-left:3px solid {pc};">
+                    <div style="display:flex;justify-content:space-between;">
+                        <div>
+                            <h4 style="color:white;margin:0;font-size:0.95em;">{p["sym"]} <span style="color:#808495;font-size:0.7em;">{qty}%</span></h4>
+                            <p style="color:#808495;font-size:0.75em;">{p["dir"]} | {p.get("setup", "N/A")}</p>
+                        </div>
+                        <h4 style="color:{pc};margin:0;">${p["pnl"]:+.2f}</h4>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;margin-top:5px;">
+                        <span style="color:#808495;font-size:0.65em;">SL: ${p["sl"]:.2f} {be_status}</span>
+                        <span style="color:#808495;font-size:0.65em;">{p1}T1 {p2}T2</span>
+                    </div>
+                    <div style="margin-top:5px;text-align:center;">
+                        <span style="color:{mode_color};font-size:0.7em;font-weight:600;">{mode_icon} {mode_text}</span>
+                    </div>
+                </div>''', unsafe_allow_html=True)
+                
+                # Toggle and Close buttons
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    toggle_label = "🤖 Auto" if is_manual else "🖐️ Manual"
+                    if st.button(toggle_label, key=f"toggle_{p['id']}_{i}", use_container_width=True):
+                        st.session_state.pos[i]['manual_mode'] = not is_manual
+                        st.rerun()
+                with col_b:
+                    if is_manual:
+                        if st.button(f"🔴 Close", key=f"close_{p['id']}_{i}", use_container_width=True):
+                            sell(i)
+                            st.rerun()
+                    else:
+                        st.button("🔒 Protected", key=f"prot_{p['id']}_{i}", disabled=True, use_container_width=True)
+        else:
+            st.info("No positions")
+    
+    # MOBILE: Show positions FIRST (above scanner) when there are active positions
+    # Uses CSS media query detection via markdown
+    if st.session_state.pos:
+        st.markdown('''<style>
+            @media (min-width: 768px) { .mobile-positions { display: none !important; } }
+            @media (max-width: 767px) { .desktop-positions { display: none !important; } }
+        </style>''', unsafe_allow_html=True)
+        
+        # Mobile positions (shows only on small screens)
+        st.markdown('<div class="mobile-positions">', unsafe_allow_html=True)
+        show_positions()
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Main content - Scanner (left) and Positions (right on desktop)
     col1, col2 = st.columns([2, 1])
     
     with col1:
@@ -1928,58 +2054,11 @@ def trade():
             elif stk['news']['sent'] == 'BULLISH':
                 st.markdown(f'<div class="ng"><span style="color:#00FFA3;">📈 {", ".join(stk["news"]["green"][:2])}</span></div>', unsafe_allow_html=True)
     
+    # Desktop positions (right column - hidden on mobile via CSS)
     with col2:
-        st.markdown(f"### 📈 Positions ({len(st.session_state.pos)}/{tier['trades']})")
-        
-        if st.session_state.pos:
-            for i, p in enumerate(st.session_state.pos):
-                pc = "#00FFA3" if p['pnl'] >= 0 else "#FF4B4B"
-                
-                # Position status indicators
-                qty = p.get('qty', 100)
-                p1 = "✅" if p.get('partial_1_taken') else "⬜"
-                p2 = "✅" if p.get('partial_2_taken') else "⬜"
-                be_status = "🔒BE" if p.get('stop_at_breakeven') else ""
-                
-                # Per-trade manual mode
-                is_manual = p.get('manual_mode', False)
-                mode_icon = "🖐️" if is_manual else "🤖"
-                mode_text = "MANUAL" if is_manual else "AUTO"
-                mode_color = "#FFA500" if is_manual else "#00FFA3"
-                
-                st.markdown(f'''<div class="pcard" style="border-left:3px solid {pc};">
-                    <div style="display:flex;justify-content:space-between;">
-                        <div>
-                            <h4 style="color:white;margin:0;font-size:0.95em;">{p["sym"]} <span style="color:#808495;font-size:0.7em;">{qty}%</span></h4>
-                            <p style="color:#808495;font-size:0.75em;">{p["dir"]} | {p.get("setup", "N/A")}</p>
-                        </div>
-                        <h4 style="color:{pc};margin:0;">${p["pnl"]:+.2f}</h4>
-                    </div>
-                    <div style="display:flex;justify-content:space-between;margin-top:5px;">
-                        <span style="color:#808495;font-size:0.65em;">SL: ${p["sl"]:.2f} {be_status}</span>
-                        <span style="color:#808495;font-size:0.65em;">{p1}T1 {p2}T2</span>
-                    </div>
-                    <div style="margin-top:5px;text-align:center;">
-                        <span style="color:{mode_color};font-size:0.7em;font-weight:600;">{mode_icon} {mode_text}</span>
-                    </div>
-                </div>''', unsafe_allow_html=True)
-                
-                # Toggle and Close buttons
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    toggle_label = "🤖 Auto" if is_manual else "🖐️ Manual"
-                    if st.button(toggle_label, key=f"toggle_{p['id']}", use_container_width=True):
-                        st.session_state.pos[i]['manual_mode'] = not is_manual
-                        st.rerun()
-                with col_b:
-                    if is_manual:
-                        if st.button(f"🔴 Close", key=f"close_{p['id']}", use_container_width=True):
-                            sell(i)
-                            st.rerun()
-                    else:
-                        st.button("🔒 Protected", key=f"prot_{p['id']}", disabled=True, use_container_width=True)
-        else:
-            st.info("No positions")
+        st.markdown('<div class="desktop-positions">', unsafe_allow_html=True)
+        show_positions()
+        st.markdown('</div>', unsafe_allow_html=True)
         
         st.markdown("### 📜 Ticker")
         for t in reversed(st.session_state.ticker[-5:]):
@@ -2157,6 +2236,50 @@ def learn():
             <strong style="color:#00FFA3;">{name}</strong>
             <span style="color:#808495;"> - {desc}</span>
         </div>''', unsafe_allow_html=True)
+    
+    # FULL LEGAL DISCLAIMER SECTION
+    st.markdown("### ⚠️ Important Disclaimers")
+    
+    with st.expander("📜 Read Full Legal Disclaimer"):
+        st.markdown('''
+**EDUCATIONAL PURPOSE ONLY**
+
+Project Hope is educational software designed to assist users in learning trading strategies. It is NOT investment advice and should not be construed as such.
+
+**NOT AN INVESTMENT ADVISER**
+
+Stephen Martinez and Project Hope are NOT registered investment advisers with the U.S. Securities and Exchange Commission (SEC) or any state securities authority. We do not provide personalized investment advice.
+
+Project Hope relies upon the "publisher's exclusion" from the definition of "investment adviser" as provided under Section 202(a)(11)(D) of the Investment Advisers Act of 1940. The information provided is impersonal and not tailored to the investment needs of any specific person.
+
+**USER RESPONSIBILITY**
+
+YOU are solely responsible for all trading decisions made using this software. YOU authorize all trades executed through YOUR brokerage account. Project Hope does not have discretionary control over your account.
+
+**RISK DISCLOSURE**
+
+Trading options involves substantial risk of loss. You could lose some or all of your invested capital. Past performance does not guarantee future results.
+
+The high degree of leverage available in options trading can work against you as well as for you. The use of leverage can lead to large losses as well as gains.
+
+**NO GUARANTEES**
+
+We make NO guarantees of profit. Hypothetical or simulated performance results have inherent limitations. Unlike an actual performance record, simulated results do not represent actual trading.
+
+**CONSULT PROFESSIONALS**
+
+We recommend that you consult with a qualified financial advisor, attorney, and/or tax professional before making any investment decisions.
+
+**TERMS OF USE**
+
+By using Project Hope, you acknowledge that you have read, understood, and agree to these terms. You accept full responsibility for your trading decisions and results.
+        ''')
+    
+    st.markdown('''<div style="background:rgba(255,165,0,0.1);border:1px solid rgba(255,165,0,0.3);border-radius:10px;padding:12px;margin:15px 0;">
+        <p style="color:#FFA500;font-size:0.75em;margin:0;text-align:center;">
+        ⚠️ Trading involves substantial risk. Past performance does not guarantee future results. Only trade with money you can afford to lose.
+        </p>
+    </div>''', unsafe_allow_html=True)
 
 # =============================================================================
 # MAIN
