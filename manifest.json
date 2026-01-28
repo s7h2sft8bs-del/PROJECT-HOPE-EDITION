@@ -1,0 +1,21 @@
+{
+  "name": "Project Hope",
+  "short_name": "Hope",
+  "description": "Professional Options Trading - Protect First, Profit Second",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0E1117",
+  "theme_color": "#00FFA3",
+  "icons": [
+    {
+      "src": "https://i.imgur.com/8GZKx0F.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://i.imgur.com/8GZKx0F.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
