@@ -1487,8 +1487,11 @@ def update():
         # Calculate current gain %
         gain_pct = (p['cur'] - p['entry']) / p['entry']
         
-        # Auto-management if autopilot ON or STARTER tier
-        if st.session_state.auto or st.session_state.tier == 1:
+        # CHECK IF THIS TRADE IS IN MANUAL MODE
+        is_manual = p.get('manual_mode', False)
+        
+        # Auto-management if autopilot ON or STARTER tier AND not in manual mode for this trade
+        if (st.session_state.auto or st.session_state.tier == 1) and not is_manual:
             
             # STOP LOSS CHECK (always first)
             effective_stop = p['entry'] if p.get('stop_at_breakeven') else p['sl']
@@ -1523,6 +1526,13 @@ def update():
             if gain_pct >= MOVE_STOP_TO_BE and not p.get('stop_at_breakeven'):
                 p['stop_at_breakeven'] = True
                 p['sl'] = p['entry']
+        
+        # MANUAL MODE: Still protect with stop loss, but no auto take profits
+        elif is_manual:
+            effective_stop = p['entry'] if p.get('stop_at_breakeven') else p['sl']
+            if p['cur'] <= effective_stop:
+                sell(i)
+                return
 
 def auto_trade(stks):
     """Automatically enter trades when CONFIRMED signals hit"""
@@ -1922,6 +1932,12 @@ def trade():
                 p2 = "✅" if p.get('partial_2_taken') else "⬜"
                 be_status = "🔒BE" if p.get('stop_at_breakeven') else ""
                 
+                # Per-trade manual mode
+                is_manual = p.get('manual_mode', False)
+                mode_icon = "🖐️" if is_manual else "🤖"
+                mode_text = "MANUAL" if is_manual else "AUTO"
+                mode_color = "#FFA500" if is_manual else "#00FFA3"
+                
                 st.markdown(f'''<div class="pcard" style="border-left:3px solid {pc};">
                     <div style="display:flex;justify-content:space-between;">
                         <div>
@@ -1934,13 +1950,25 @@ def trade():
                         <span style="color:#808495;font-size:0.65em;">SL: ${p["sl"]:.2f} {be_status}</span>
                         <span style="color:#808495;font-size:0.65em;">{p1}T1 {p2}T2</span>
                     </div>
+                    <div style="margin-top:5px;text-align:center;">
+                        <span style="color:{mode_color};font-size:0.7em;font-weight:600;">{mode_icon} {mode_text}</span>
+                    </div>
                 </div>''', unsafe_allow_html=True)
                 
-                # Manual close button (only when auto is OFF)
-                if tier['auto'] != 'always' and not st.session_state.auto:
-                    if st.button(f"🔴 Close {p['sym']}", key=f"close_{p['id']}", use_container_width=True):
-                        sell(i)
+                # Toggle and Close buttons
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    toggle_label = "🤖 Auto" if is_manual else "🖐️ Manual"
+                    if st.button(toggle_label, key=f"toggle_{p['id']}", use_container_width=True):
+                        st.session_state.pos[i]['manual_mode'] = not is_manual
                         st.rerun()
+                with col_b:
+                    if is_manual:
+                        if st.button(f"🔴 Close", key=f"close_{p['id']}", use_container_width=True):
+                            sell(i)
+                            st.rerun()
+                    else:
+                        st.button("🔒 Protected", key=f"prot_{p['id']}", disabled=True, use_container_width=True)
         else:
             st.info("No positions")
         
