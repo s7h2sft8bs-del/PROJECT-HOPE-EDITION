@@ -380,6 +380,15 @@ if acct:
 # STYLES
 # =============================================================================
 st.markdown("""
+<head>
+    <link rel="manifest" href="/manifest.json">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Project Hope">
+    <meta name="theme-color" content="#00FFA3">
+    <link rel="apple-touch-icon" href="https://i.imgur.com/8GZKx0F.png">
+</head>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
 *{font-family:'Inter',sans-serif}
@@ -1655,16 +1664,16 @@ def home():
     st.markdown("### 💎 Choose Your Plan")
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown('<div class="tier"><h3 style="color:#00FFA3;">STARTER</h3><p class="pr">$49<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 1 Stock</p><p class="f"><span class="yes">✓</span> 1 Trade</p><p class="f"><span class="yes">✓</span> Auto Always</p><p class="f"><span class="yes">✓</span> All Protections</p><p class="f"><span class="no">✗</span> Manual</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="tier"><h3 style="color:#00FFA3;">STARTER</h3><p class="pr">$49<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 1 Stock</p><p class="f"><span class="yes">✓</span> 1 Trade</p><p class="f"><span class="yes">✓</span> Auto Always</p><p class="f"><span class="yes">✓</span> All Protections</p><p class="f"><span class="no">✗</span> Manual</p><p style="color:#FFA500;font-size:0.7em;margin-top:8px;">⚠️ Min Account: $1,000</p></div>', unsafe_allow_html=True)
         st.link_button("GET STARTER", SIGNUP_LINKS["STARTER"], use_container_width=True)
     with c2:
-        st.markdown('<div class="tier"><h3 style="color:#00E5FF;">BUILDER</h3><p class="pr">$99<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 3 Stocks</p><p class="f"><span class="yes">✓</span> 2 Trades</p><p class="f"><span class="yes">✓</span> Auto Toggle</p><p class="f"><span class="yes">✓</span> All Protections</p><p class="f"><span class="no">✗</span> Coaching</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="tier"><h3 style="color:#00E5FF;">BUILDER</h3><p class="pr">$99<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 3 Stocks</p><p class="f"><span class="yes">✓</span> 2 Trades</p><p class="f"><span class="yes">✓</span> Auto Toggle</p><p class="f"><span class="yes">✓</span> All Protections</p><p class="f"><span class="no">✗</span> Coaching</p><p style="color:#FFA500;font-size:0.7em;margin-top:8px;">⚠️ Min Account: $2,000</p></div>', unsafe_allow_html=True)
         st.link_button("GET BUILDER", SIGNUP_LINKS["BUILDER"], use_container_width=True)
     with c3:
-        st.markdown('<div class="tier" style="box-shadow:0 0 30px rgba(255,215,0,0.15);border:1px solid rgba(255,215,0,0.2);"><span class="badge">POPULAR</span><h3 style="color:#FFD700;">MASTER</h3><p class="pr">$199<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 6 Stocks</p><p class="f"><span class="yes">✓</span> 3 Trades</p><p class="f"><span class="yes">✓</span> Auto Toggle</p><p class="f"><span class="yes">✓</span> Priority</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="tier" style="box-shadow:0 0 30px rgba(255,215,0,0.15);border:1px solid rgba(255,215,0,0.2);"><span class="badge">POPULAR</span><h3 style="color:#FFD700;">MASTER</h3><p class="pr">$199<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 6 Stocks</p><p class="f"><span class="yes">✓</span> 3 Trades</p><p class="f"><span class="yes">✓</span> Auto Toggle</p><p class="f"><span class="yes">✓</span> Priority</p><p style="color:#FFA500;font-size:0.7em;margin-top:8px;">⚠️ Min Account: $3,000</p></div>', unsafe_allow_html=True)
         st.link_button("GET MASTER", SIGNUP_LINKS["MASTER"], use_container_width=True)
     with c4:
-        st.markdown('<div class="tier"><h3 style="color:#FF6B6B;">VIP</h3><p class="pr">$499<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 15 Stocks</p><p class="f"><span class="yes">✓</span> 5 Trades</p><p class="f"><span class="yes">✓</span> 1-on-1 Coach</p><p class="f"><span class="yes">✓</span> Community</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="tier"><h3 style="color:#FF6B6B;">VIP</h3><p class="pr">$499<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 15 Stocks</p><p class="f"><span class="yes">✓</span> 5 Trades</p><p class="f"><span class="yes">✓</span> 1-on-1 Coach</p><p class="f"><span class="yes">✓</span> Community</p><p style="color:#FFA500;font-size:0.7em;margin-top:8px;">⚠️ Min Account: $5,000</p></div>', unsafe_allow_html=True)
         st.link_button("GET VIP", SIGNUP_LINKS["VIP"], use_container_width=True)
     
     st.markdown("### 🔐 Already a Member? Login")
