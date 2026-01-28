@@ -539,8 +539,6 @@ def sync_tradier_balance():
     """Sync balance from Tradier - runs automatically"""
     tradier_acct = get_tradier_account()
     if tradier_acct:
-        st.session_state.bal = tradier_acct['cash']
-        st.session_state.start = tradier_acct['equity']
         st.session_state.tradier_connected = True
         st.session_state.last_balance_sync = datetime.now()
         return True
@@ -550,7 +548,6 @@ def sync_tradier_balance():
 st.session_state.bal = 100000.0
 st.session_state.start = 100000.0
 st.session_state.tradier_connected = True
-sync_tradier_balance()
 
 # Daily reset
 if st.session_state.date != datetime.now().strftime('%Y-%m-%d'):
