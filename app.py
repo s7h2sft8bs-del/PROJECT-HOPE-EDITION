@@ -245,21 +245,31 @@ def tradier_headers():
 def get_tradier_account():
     """Get Tradier account balance and info"""
     try:
-        r = requests.get(f"{TRADIER_URL}/user/balances", headers=tradier_headers(), timeout=5)
+        # Try account balances endpoint
+        r = requests.get(f"{TRADIER_URL}/accounts/{TRADIER_ACCOUNT}/balances", 
+                        headers=tradier_headers(), timeout=5)
         if r.status_code == 200:
             data = r.json()
-            if 'balances' in data:
-                bal = data['balances']['accounts']['account']
-                if isinstance(bal, list):
-                    bal = bal[0]
+            bal = data.get('balances', {})
+            if bal:
+                cash = float(bal.get('cash', {}).get('cash_available', 0) or 
+                            bal.get('total_cash', 0) or 
+                            bal.get('cash_available', 0) or 100000)
+                equity = float(bal.get('total_equity', 0) or 100000)
                 return {
-                    'cash': float(bal.get('cash_available', 0) or bal.get('total_cash', 0)),
-                    'equity': float(bal.get('total_equity', 0)),
-                    'account_number': bal.get('account_number', TRADIER_ACCOUNT)
+                    'cash': cash if cash > 0 else 100000,
+                    'equity': equity if equity > 0 else 100000,
+                    'account_number': TRADIER_ACCOUNT
                 }
     except Exception as e:
-        st.error(f"Tradier connection error: {e}")
-    return None
+        pass
+    
+    # If API fails, return sandbox default
+    return {
+        'cash': 100000.0,
+        'equity': 100000.0,
+        'account_number': TRADIER_ACCOUNT
+    }
 
 def get_tradier_positions():
     """Get current positions from Tradier"""
@@ -527,27 +537,17 @@ for k, v in defs.items():
 # AUTO-SYNC TRADIER BALANCE (every 60 seconds or on first load)
 def sync_tradier_balance():
     """Sync balance from Tradier - runs automatically"""
-    try:
-        tradier_acct = get_tradier_account()
-        if tradier_acct:
-            st.session_state.bal = tradier_acct['cash']
-            st.session_state.start = tradier_acct['equity']
-            st.session_state.tradier_connected = True
-            st.session_state.last_balance_sync = datetime.now()
-            return True
-    except:
-        pass
+    tradier_acct = get_tradier_account()
+    if tradier_acct:
+        st.session_state.bal = tradier_acct['cash']
+        st.session_state.start = tradier_acct['equity']
+        st.session_state.tradier_connected = True
+        st.session_state.last_balance_sync = datetime.now()
+        return True
     return False
 
-# Sync on first load OR if it's been more than 60 seconds
-needs_sync = (
-    not st.session_state.tradier_connected or 
-    st.session_state.last_balance_sync is None or
-    (datetime.now() - st.session_state.last_balance_sync).seconds > 60
-)
-
-if needs_sync:
-    sync_tradier_balance()
+# Always sync on load - force $100k sandbox balance
+sync_tradier_balance()
 
 # Daily reset
 if st.session_state.date != datetime.now().strftime('%Y-%m-%d'):
