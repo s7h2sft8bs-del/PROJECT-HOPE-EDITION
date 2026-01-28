@@ -1672,6 +1672,13 @@ def home():
             
             if st.button("🔓 Login", type="primary", use_container_width=True):
                 if email and password:
+                    # DEMO access for owner
+                    if email.upper() == "DEMO" and password.upper() == "DEMO":
+                        st.session_state.tier = 4  # VIP access
+                        st.session_state.user_email = "demo@projecthope.com"
+                        st.success("✅ DEMO MODE - VIP Access")
+                        st.rerun()
+                    
                     # Try to verify with Outseta API
                     try:
                         # Authenticate with Outseta
