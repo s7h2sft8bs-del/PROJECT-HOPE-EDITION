@@ -23,6 +23,28 @@ ALPACA_URL = "https://paper-api.alpaca.markets"
 DATA_URL = "https://data.alpaca.markets"
 
 # =============================================================================
+# OUTSETA API (Subscription Management)
+# =============================================================================
+OUTSETA_API_KEY = "bfa0edb1-5ae9-41f2-852d-414b44b64d59"
+OUTSETA_DOMAIN = "project-hope.outseta.com"
+
+# Outseta Plan UIDs (from your Outseta dashboard)
+OUTSETA_PLANS = {
+    "STARTER": "y9gNPqQM",
+    "BUILDER": "Rm8ERVQ4",
+    "MASTER": "49EKrLm7",
+    "VIP": "wmjqBZWV"
+}
+
+# Signup links for each tier
+SIGNUP_LINKS = {
+    "STARTER": "https://project-hope.outseta.com/auth?widgetMode=register&planUid=y9gNPqQM",
+    "BUILDER": "https://project-hope.outseta.com/auth?widgetMode=register&planUid=Rm8ERVQ4",
+    "MASTER": "https://project-hope.outseta.com/auth?widgetMode=register&planUid=49EKrLm7",
+    "VIP": "https://project-hope.outseta.com/auth?widgetMode=register&planUid=wmjqBZWV"
+}
+
+# =============================================================================
 # FOUNDER INFO
 # =============================================================================
 PHOTO = "https://i.postimg.cc/qvVSgvfx/IMG-7642.jpg"
@@ -295,6 +317,8 @@ defs = {
     'locked': False,
     'date': datetime.now().strftime('%Y-%m-%d'),
     'nc': {},
+    # USER LOGIN
+    'user_email': None,                # Logged in user's email
     # PROFESSIONAL ADDITIONS
     'last_loss_time': None,           # For cooldown tracking
     'market_regime': 'UNKNOWN',       # TREND or CHOP
@@ -1628,7 +1652,7 @@ def home():
     with c4:
         st.markdown('<div class="tier"><h3 style="color:#FF6B6B;">VIP</h3><p class="pr">$499<span style="font-size:0.4em;color:#808495;">/mo</span></p><p class="f"><span class="yes">✓</span> 15 Stocks</p><p class="f"><span class="yes">✓</span> 5 Trades</p><p class="f"><span class="yes">✓</span> 1-on-1 Coach</p><p class="f"><span class="yes">✓</span> Community</p></div>', unsafe_allow_html=True)
     
-    st.markdown("### 🔐 Access Code")
+    st.markdown("### 🔐 Access")
     _, c2, _ = st.columns([1, 2, 1])
     with c2:
         # Show button if already logged in
@@ -1638,15 +1662,79 @@ def home():
                 st.session_state.page = 'trade'
                 st.rerun()
         else:
-            # Show code input
-            code = st.text_input("Code", type="password", label_visibility="collapsed", placeholder="Enter code...", key="access_code")
-            codes = {"HOPE49": 1, "HOPE99": 2, "HOPE199": 3, "HOPE499": 4, "DEMO": 3}
-            if code:
-                if code.upper() in codes:
-                    st.session_state.tier = codes[code.upper()]
-                    st.rerun()
-                else:
-                    st.error("Invalid")
+            # Login tabs - Email (Outseta) or Access Code
+            login_tab = st.radio("Login method:", ["📧 Email", "🔑 Access Code"], horizontal=True, label_visibility="collapsed")
+            
+            if login_tab == "📧 Email":
+                # Email-based login (checks Outseta)
+                email = st.text_input("Email", placeholder="Enter your email...", key="login_email")
+                
+                if email and st.button("🔓 Login", type="primary", use_container_width=True):
+                    # Check if email exists in Outseta and has active subscription
+                    # For now, we store logged-in emails in session
+                    if 'verified_emails' not in st.session_state:
+                        st.session_state.verified_emails = {}
+                    
+                    # Try to verify with Outseta API
+                    try:
+                        # Check Outseta for this email's subscription
+                        headers = {"Authorization": f"Bearer {OUTSETA_API_KEY}"} if OUTSETA_API_KEY else {}
+                        resp = requests.get(
+                            f"https://{OUTSETA_DOMAIN}/api/v1/crm/people",
+                            params={"email": email},
+                            headers=headers,
+                            timeout=5
+                        )
+                        
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            if data.get('items') and len(data['items']) > 0:
+                                person = data['items'][0]
+                                # Check subscription status
+                                account = person.get('Account', {})
+                                subscription = account.get('CurrentSubscription', {})
+                                plan_name = subscription.get('Plan', {}).get('Name', '').upper()
+                                
+                                # Map plan to tier
+                                tier_map = {"STARTER": 1, "BUILDER": 2, "MASTER": 3, "VIP": 4}
+                                if plan_name in tier_map:
+                                    st.session_state.tier = tier_map[plan_name]
+                                    st.session_state.user_email = email
+                                    st.success(f"✅ Welcome back! {plan_name} access granted.")
+                                    st.rerun()
+                                else:
+                                    st.warning("No active subscription found. Please subscribe below!")
+                            else:
+                                st.warning("Email not found. Please subscribe below!")
+                        else:
+                            st.error("Could not verify. Try access code or subscribe.")
+                    except Exception as e:
+                        # If API fails, show error but allow code login
+                        st.warning("Verification unavailable. Use access code or subscribe.")
+                
+                # Subscribe buttons
+                st.markdown("---")
+                st.markdown("**Don't have an account? Subscribe:**")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.link_button("STARTER $49", SIGNUP_LINKS["STARTER"], use_container_width=True)
+                    st.link_button("MASTER $199", SIGNUP_LINKS["MASTER"], use_container_width=True)
+                with col2:
+                    st.link_button("BUILDER $99", SIGNUP_LINKS["BUILDER"], use_container_width=True)
+                    st.link_button("VIP $499", SIGNUP_LINKS["VIP"], use_container_width=True)
+            
+            else:
+                # Access code login (backup method)
+                code = st.text_input("Code", type="password", label_visibility="collapsed", placeholder="Enter code...", key="access_code")
+                codes = {"HOPE49": 1, "HOPE99": 2, "HOPE199": 3, "HOPE499": 4, "DEMO": 3, 
+                         "STARTER": 1, "BUILDER": 2, "MASTER": 3, "VIP": 4}
+                if code:
+                    if code.upper() in codes:
+                        st.session_state.tier = codes[code.upper()]
+                        st.rerun()
+                    else:
+                        st.error("Invalid")
     
     # Footer
     st.markdown(f'<div class="ft"><p style="color:#808495;font-size:0.85em;margin:0;">{NAME} | {EMAIL}</p><p style="color:#666;font-size:0.75em;margin:8px 0 0;">Educational tool only. Not financial advice.</p></div>', unsafe_allow_html=True)
