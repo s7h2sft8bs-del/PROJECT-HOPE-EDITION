@@ -15,7 +15,14 @@ st.set_page_config(page_title="Project Hope", page_icon="🌱", layout="wide", i
 # Auto-refresh moved to trade page only
 
 # =============================================================================
-# ALPACA API
+# TRADIER SANDBOX API (Paper Trading - Real Prices, Fake Money)
+# =============================================================================
+TRADIER_TOKEN = "aSgzHbh1WferAyzaHldRDWKYGtSe"
+TRADIER_ACCOUNT = "VA32364446"
+TRADIER_URL = "https://sandbox.tradier.com/v1"  # Sandbox for paper trading
+
+# =============================================================================
+# ALPACA API (for market data backup)
 # =============================================================================
 ALPACA_KEY = "PKQJEFSQBY2CFDYYHDR372QB3S"
 ALPACA_SECRET = "ArMPEE3fqY1JCB5CArZUQ5wY8fYQjuPXJ9qpnwYPHJuw"
@@ -224,10 +231,175 @@ This isn't about getting rich quick. It's about building something real, one sma
 Welcome to Project Hope. Let's build together."""
 
 # =============================================================================
-# ALPACA API FUNCTIONS
+# ALPACA API FUNCTIONS (Market Data)
 # =============================================================================
 def headers():
     return {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
+
+# =============================================================================
+# TRADIER API FUNCTIONS (Paper Trading)
+# =============================================================================
+def tradier_headers():
+    return {"Authorization": f"Bearer {TRADIER_TOKEN}", "Accept": "application/json"}
+
+def get_tradier_account():
+    """Get Tradier account balance and info"""
+    try:
+        r = requests.get(f"{TRADIER_URL}/user/balances", headers=tradier_headers(), timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            if 'balances' in data:
+                bal = data['balances']['accounts']['account']
+                if isinstance(bal, list):
+                    bal = bal[0]
+                return {
+                    'cash': float(bal.get('cash_available', 0) or bal.get('total_cash', 0)),
+                    'equity': float(bal.get('total_equity', 0)),
+                    'account_number': bal.get('account_number', TRADIER_ACCOUNT)
+                }
+    except Exception as e:
+        st.error(f"Tradier connection error: {e}")
+    return None
+
+def get_tradier_positions():
+    """Get current positions from Tradier"""
+    try:
+        r = requests.get(f"{TRADIER_URL}/accounts/{TRADIER_ACCOUNT}/positions", 
+                        headers=tradier_headers(), timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            positions = data.get('positions', {})
+            if positions == 'null' or positions is None:
+                return []
+            pos_list = positions.get('position', [])
+            if isinstance(pos_list, dict):
+                pos_list = [pos_list]
+            return pos_list
+    except:
+        pass
+    return []
+
+def get_tradier_quote(symbol):
+    """Get real-time quote from Tradier"""
+    try:
+        r = requests.get(f"{TRADIER_URL}/markets/quotes",
+                        headers=tradier_headers(),
+                        params={'symbols': symbol}, timeout=3)
+        if r.status_code == 200:
+            data = r.json()
+            quotes = data.get('quotes', {}).get('quote', {})
+            if quotes:
+                return float(quotes.get('last', 0) or quotes.get('bid', 0))
+    except:
+        pass
+    return None
+
+def get_option_chain(symbol, expiration=None):
+    """Get option chain for a symbol"""
+    try:
+        # Get next Friday expiration if not specified
+        if not expiration:
+            today = datetime.now()
+            days_until_friday = (4 - today.weekday()) % 7
+            if days_until_friday == 0:
+                days_until_friday = 7
+            expiration = (today + timedelta(days=days_until_friday)).strftime('%Y-%m-%d')
+        
+        r = requests.get(f"{TRADIER_URL}/markets/options/chains",
+                        headers=tradier_headers(),
+                        params={'symbol': symbol, 'expiration': expiration}, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            options = data.get('options', {})
+            if options:
+                return options.get('option', [])
+    except:
+        pass
+    return []
+
+def find_option(symbol, option_type='call', max_price=500):
+    """Find an appropriate option to trade"""
+    chain = get_option_chain(symbol)
+    if not chain:
+        return None
+    
+    stock_price = get_tradier_quote(symbol)
+    if not stock_price:
+        return None
+    
+    # Filter by type and find ATM option
+    options = [o for o in chain if o.get('option_type') == option_type]
+    
+    # Sort by how close strike is to current price
+    options.sort(key=lambda x: abs(x.get('strike', 0) - stock_price))
+    
+    # Find one within our price range
+    for opt in options:
+        ask = opt.get('ask', 0) or opt.get('last', 0)
+        if ask and ask * 100 <= max_price:  # Convert to contract price
+            return opt
+    
+    return None
+
+def place_tradier_order(symbol, side, quantity, order_type='market', price=None):
+    """Place an order through Tradier"""
+    try:
+        data = {
+            'class': 'option' if len(symbol) > 10 else 'equity',
+            'symbol': symbol,
+            'side': side,  # 'buy_to_open', 'sell_to_close' for options
+            'quantity': quantity,
+            'type': order_type,
+            'duration': 'day'
+        }
+        if price and order_type == 'limit':
+            data['price'] = price
+            
+        r = requests.post(f"{TRADIER_URL}/accounts/{TRADIER_ACCOUNT}/orders",
+                         headers=tradier_headers(),
+                         data=data, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        st.error(f"Order error: {e}")
+    return None
+
+def buy_option_tradier(symbol, option_type, position_size):
+    """Buy an option through Tradier - REAL PAPER TRADING"""
+    # Find appropriate option
+    opt = find_option(symbol, option_type.lower(), position_size)
+    if not opt:
+        return False, "No suitable option found"
+    
+    option_symbol = opt.get('symbol')
+    ask_price = opt.get('ask', 0) or opt.get('last', 0)
+    
+    if not ask_price or ask_price <= 0:
+        return False, "Invalid option price"
+    
+    # Calculate quantity (how many contracts we can afford)
+    contract_cost = ask_price * 100
+    qty = max(1, int(position_size / contract_cost))
+    
+    # Place the order
+    result = place_tradier_order(option_symbol, 'buy_to_open', qty)
+    
+    if result and result.get('order'):
+        return True, {
+            'option_symbol': option_symbol,
+            'strike': opt.get('strike'),
+            'expiration': opt.get('expiration_date'),
+            'qty': qty,
+            'entry_price': ask_price,
+            'order_id': result['order'].get('id')
+        }
+    
+    return False, "Order failed"
+
+def sell_option_tradier(option_symbol, qty):
+    """Sell an option through Tradier"""
+    result = place_tradier_order(option_symbol, 'sell_to_close', qty)
+    return result is not None
 
 def get_acct():
     try:
@@ -321,6 +493,8 @@ defs = {
     'user_email': None,                # Logged in user's email
     # LEGAL DISCLAIMER
     'disclaimer_accepted': False,      # User accepted risk disclaimer
+    # TRADIER CONNECTION
+    'tradier_connected': False,        # Is Tradier connected?
     # PROFESSIONAL ADDITIONS
     'last_loss_time': None,           # For cooldown tracking
     'market_regime': 'UNKNOWN',       # TREND or CHOP
@@ -348,6 +522,14 @@ defs = {
 for k, v in defs.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+# SYNC WITH TRADIER BALANCE ON STARTUP
+if not st.session_state.tradier_connected:
+    tradier_acct = get_tradier_account()
+    if tradier_acct:
+        st.session_state.bal = tradier_acct['cash']
+        st.session_state.start = tradier_acct['equity']
+        st.session_state.tradier_connected = True
 
 # Daily reset
 if st.session_state.date != datetime.now().strftime('%Y-%m-%d'):
@@ -1365,12 +1547,33 @@ def can_buy(stk):
     return True, "OK"
 
 def buy(stk, direction):
-    """Execute buy"""
+    """Execute buy - NOW USES TRADIER PAPER TRADING"""
     ok, reason = can_buy(stk)
     if not ok:
         return False, reason
     
-    cost = stk['oc'] * 100
+    # Calculate position size (5% of balance)
+    position_size = st.session_state.bal * 0.05
+    
+    # Try to place REAL order through Tradier
+    option_type = 'call' if direction == 'CALL' else 'put'
+    success, result = buy_option_tradier(stk['sym'], option_type, position_size)
+    
+    if not success:
+        # Fallback to simulation if Tradier fails
+        st.warning(f"Tradier order failed: {result}. Using simulation.")
+        cost = stk['oc'] * 100
+        option_symbol = f"{stk['sym']}_{direction}_SIM"
+        entry_price = stk['oc']
+        qty = 1
+    else:
+        # Real Tradier order went through!
+        option_symbol = result['option_symbol']
+        entry_price = result['entry_price']
+        qty = result['qty']
+        cost = entry_price * qty * 100
+        st.success(f"✅ REAL ORDER: {qty}x {option_symbol} @ ${entry_price:.2f}")
+    
     st.session_state.bal -= cost
     
     setup_type = stk['best_setup']['type'] if stk['best_setup'] else 'MANUAL'
@@ -1378,23 +1581,26 @@ def buy(stk, direction):
     st.session_state.pos.append({
         'id': f"{stk['sym']}_{datetime.now().strftime('%H%M%S')}",
         'sym': stk['sym'],
+        'option_symbol': option_symbol,  # Track actual option for closing
         'dir': direction,
         'setup': setup_type,
-        'entry': stk['oc'],
-        'cur': stk['oc'],
-        'sl': stk['sl'],
-        'tp': stk['tp'],
-        'original_sl': stk['sl'],          # Keep original for reference
+        'entry': entry_price,
+        'cur': entry_price,
+        'sl': entry_price * (1 - STOP_LOSS),  # -25% stop
+        'tp': entry_price * (1 + TAKE_PROFIT),  # +30% take profit
+        'original_sl': entry_price * (1 - STOP_LOSS),
         'pnl': 0,
         'ticks': 0,
         'entry_time': datetime.now(),
         # PARTIAL PROFIT TRACKING
-        'qty': 100,                         # Start with 100% (represented as 100)
-        'partial_1_taken': False,           # 50% at +15%
-        'partial_2_taken': False,           # 25% at +25%
-        'stop_at_breakeven': False,         # Flag for trailing
-        'realized_pnl': 0,                  # Track realized from partials
-        'price_history': [stk['oc']],       # For share card chart
+        'qty': qty,                           # Actual contract quantity
+        'qty_pct': 100,                       # Percentage remaining
+        'partial_1_taken': False,
+        'partial_2_taken': False,
+        'stop_at_breakeven': False,
+        'realized_pnl': 0,
+        'price_history': [entry_price],
+        'is_live': success,                   # Track if real or simulated
     })
     
     tick('BUY', stk['sym'], direction)
@@ -1477,17 +1683,28 @@ def sell(i, partial_pct=None):
     st.session_state.pos.pop(i)
 
 def update():
-    """Update positions with realistic price movement + professional profit management"""
+    """Update positions with REAL PRICES from Tradier + professional profit management"""
     for i, p in enumerate(st.session_state.pos):
         p['ticks'] += 1
         
-        # Realistic movement: small changes that ACCUMULATE from current price
-        change = random.gauss(0.001, 0.008)  # Smaller per-tick change
-        change = max(-0.015, min(0.018, change))  # Cap the change
+        # GET REAL PRICE from Tradier if this is a live trade
+        if p.get('is_live') and p.get('option_symbol'):
+            real_price = get_tradier_quote(p['option_symbol'])
+            if real_price and real_price > 0:
+                p['cur'] = real_price
+            else:
+                # Fallback: small random movement if can't get price
+                change = random.gauss(0.001, 0.008)
+                p['cur'] = round(p['cur'] * (1 + change), 2)
+        else:
+            # Simulated trade - use random movement
+            change = random.gauss(0.001, 0.008)
+            change = max(-0.015, min(0.018, change))
+            p['cur'] = round(p['cur'] * (1 + change), 2)
         
-        # Apply change to CURRENT price (not entry) - this makes it accumulate
-        p['cur'] = round(p['cur'] * (1 + change), 2)
-        p['pnl'] = round((p['cur'] - p['entry']) * p.get('qty', 100), 2)
+        # Calculate P/L based on actual quantity
+        qty = p.get('qty', 1)
+        p['pnl'] = round((p['cur'] - p['entry']) * qty * 100, 2)  # *100 for contract multiplier
         
         # Track price history for chart
         if 'price_history' in p:
@@ -1623,6 +1840,18 @@ def home():
     
     if acct:
         st.markdown(f'<div class="conn"><span style="color:#00FFA3;font-weight:700;">✓ ALPACA</span> | <span style="color:#FFD700;font-weight:700;">${st.session_state.bal:,.2f}</span></div>', unsafe_allow_html=True)
+    
+    # TRADIER CONNECTION STATUS
+    if st.session_state.tradier_connected:
+        st.markdown(f'''<div style="background:rgba(0,255,163,0.1);border:1px solid rgba(0,255,163,0.3);border-radius:10px;padding:10px;margin:10px 0;text-align:center;">
+            <span style="color:#00FFA3;font-weight:700;">✅ TRADIER SANDBOX CONNECTED</span> | 
+            <span style="color:#FFD700;font-weight:700;">Paper Balance: ${st.session_state.bal:,.2f}</span>
+        </div>''', unsafe_allow_html=True)
+    else:
+        st.markdown(f'''<div style="background:rgba(255,75,75,0.1);border:1px solid rgba(255,75,75,0.3);border-radius:10px;padding:10px;margin:10px 0;text-align:center;">
+            <span style="color:#FF4B4B;font-weight:700;">⚠️ TRADIER NOT CONNECTED</span> | 
+            <span style="color:#808495;">Using simulation mode</span>
+        </div>''', unsafe_allow_html=True)
     
     status, ct, cd, _, in_window = mkt()
     window_text = "🟢 TRADING WINDOW" if in_window else "🔴 OUTSIDE WINDOW"
