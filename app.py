@@ -319,9 +319,6 @@ defs = {
     'nc': {},
     # USER LOGIN
     'user_email': None,                # Logged in user's email
-    # WORSHIP MODE
-    'worship_on': False,               # Worship music toggle
-    'worship_lang': 'English',         # English or Spanish
     # PROFESSIONAL ADDITIONS
     'last_loss_time': None,           # For cooldown tracking
     'market_regime': 'UNKNOWN',       # TREND or CHOP
@@ -1817,28 +1814,6 @@ def trade():
     regime_class = "regime-trend" if regime == "TREND" else "regime-chop"
     st.markdown(f'<div style="text-align:center;margin:10px 0;"><span class="{regime_class}">Market: <strong>{regime}</strong> | VWAP Crosses: {st.session_state.vwap_crosses}</span></div>', unsafe_allow_html=True)
     
-    # 🎵 WORSHIP MODE
-    with st.expander("🙏 Worship Mode", expanded=False):
-        st.markdown('<p style="text-align:center;color:#808495;font-size:0.85em;">Trade with worship playing in the background 🎶</p>', unsafe_allow_html=True)
-        
-        st.markdown("**🇺🇸 English Worship:**")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.link_button("🎵 Air1 Worship 24/7", "https://www.air1.com/streaming", use_container_width=True)
-        with col2:
-            st.link_button("🎵 K-LOVE Worship", "https://www.klove.com/listen", use_container_width=True)
-        
-        st.markdown("**🇪🇸 Adoración en Español:**")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.link_button("🎵 Air1 Música de Adoración", "https://listen.air1.com/musica-de-adoracion", use_container_width=True)
-        with col2:
-            st.link_button("🎵 Radio Cristiana 24h", "https://www.iheart.com/live/air1-musica-de-adoracion-10183/", use_container_width=True)
-        
-        st.markdown("---")
-        st.markdown('<p style="text-align:center;color:#00FFA3;font-size:0.95em;">✝️ "Trust in the LORD with all your heart" - Proverbs 3:5</p>', unsafe_allow_html=True)
-        st.markdown('<p style="text-align:center;color:#808495;font-size:0.8em;">💡 Tip: Open in new tab, then come back to trade!</p>', unsafe_allow_html=True)
-    
     # Status displays
     in_cooldown, cooldown_remaining = is_in_cooldown()
     
@@ -1978,6 +1953,22 @@ def trade():
 def history():
     st.markdown('<div class="logo"><span>🌱</span><span>PROJECT HOPE</span></div>', unsafe_allow_html=True)
     
+    # Random Bible verses for winning trades
+    VICTORY_VERSES = [
+        '"Trust in the LORD with all your heart" - Proverbs 3:5 ✝️',
+        '"I can do all things through Christ who strengthens me" - Philippians 4:13 ✝️',
+        '"The LORD is my shepherd, I shall not want" - Psalm 23:1 ✝️',
+        '"For I know the plans I have for you" - Jeremiah 29:11 ✝️',
+        '"Be strong and courageous" - Joshua 1:9 ✝️',
+        '"God is our refuge and strength" - Psalm 46:1 ✝️',
+        '"The blessing of the LORD makes rich" - Proverbs 10:22 ✝️',
+        '"Commit your work to the LORD" - Proverbs 16:3 ✝️',
+        '"With God all things are possible" - Matthew 19:26 ✝️',
+        '"The LORD will fight for you" - Exodus 14:14 ✝️',
+        '"Delight yourself in the LORD" - Psalm 37:4 ✝️',
+        '"He gives strength to the weary" - Isaiah 40:29 ✝️',
+    ]
+    
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         if st.button("Home", use_container_width=True, key="hh1"):
@@ -2011,18 +2002,16 @@ def history():
     # Setup Performance Stats
     st.markdown(get_setup_stats_display(), unsafe_allow_html=True)
     
-    # Share Card temporarily disabled - was causing rendering issues
-    # if st.session_state.last_win_trade:
-    #     st.markdown("### 🏆 Last Winning Trade")
-    #     share_card = generate_share_card(st.session_state.last_win_trade)
-    #     if share_card:
-    #         st.markdown(share_card, unsafe_allow_html=True)
-    
     st.markdown("### 📜 Recent Trades")
     if st.session_state.trades:
-        for t in reversed(st.session_state.trades[-10:]):
+        for i, t in enumerate(reversed(st.session_state.trades[-10:])):
             c = "#00FFA3" if t['pnl'] >= 0 else "#FF4B4B"
             entry_exit = f"${t.get('entry', 0):.2f} → ${t.get('exit', 0):.2f}" if 'entry' in t else ""
+            
+            # Random verse for this trade (seeded by trade time for consistency)
+            verse_idx = hash(t.get("t", str(i))) % len(VICTORY_VERSES)
+            verse = VICTORY_VERSES[verse_idx]
+            
             st.markdown(f'''<div class="card" style="border-left:3px solid {c};padding:12px;">
                 <div style="display:flex;justify-content:space-between;">
                     <div>
@@ -2033,6 +2022,13 @@ def history():
                     <h3 style="color:{c};margin:0;">${t["pnl"]:+.2f}</h3>
                 </div>
             </div>''', unsafe_allow_html=True)
+            
+            # Share button for winning trades
+            if t['pnl'] > 0:
+                share_text = f"🌱 PROJECT HOPE WIN 🌱\n\n{t['sym']} {t.get('dir', '')} +${t['pnl']:.2f}\n\n{verse}\n\n#ProjectHope #Trading #Blessed"
+                with st.expander("📤 Share This Win"):
+                    st.code(share_text, language=None)
+                    st.markdown("👆 **Click the copy icon** in the top-right corner of the box above!")
     else:
         st.info("No trades yet")
     
