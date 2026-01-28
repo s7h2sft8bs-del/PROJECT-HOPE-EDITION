@@ -319,6 +319,9 @@ defs = {
     'nc': {},
     # USER LOGIN
     'user_email': None,                # Logged in user's email
+    # WORSHIP MODE
+    'worship_on': False,               # Worship music toggle
+    'worship_lang': 'English',         # English or Spanish
     # PROFESSIONAL ADDITIONS
     'last_loss_time': None,           # For cooldown tracking
     'market_regime': 'UNKNOWN',       # TREND or CHOP
@@ -1568,6 +1571,7 @@ def auto_trade(stks):
 # =============================================================================
 def home():
     st.markdown('<div class="logo"><span>🌱</span><span>PROJECT HOPE</span></div>', unsafe_allow_html=True)
+    st.markdown('<p style="text-align:center;color:#00FFA3;font-size:0.95em;font-style:italic;margin:-10px 0 15px;">✝️ "Trust in the LORD with all your heart" - Proverbs 3:5</p>', unsafe_allow_html=True)
     st.markdown('<div class="hero"><h1>OPTIONS TRADING</h1><p class="sub">Professional Entry Logic</p><p class="tag">4 A+ Setups | Confirmation Required | No Impulse Trades</p></div>', unsafe_allow_html=True)
     
     c1, c2, c3, c4 = st.columns(4)
@@ -1812,6 +1816,39 @@ def trade():
     regime = st.session_state.market_regime
     regime_class = "regime-trend" if regime == "TREND" else "regime-chop"
     st.markdown(f'<div style="text-align:center;margin:10px 0;"><span class="{regime_class}">Market: <strong>{regime}</strong> | VWAP Crosses: {st.session_state.vwap_crosses}</span></div>', unsafe_allow_html=True)
+    
+    # 🎵 WORSHIP MODE
+    with st.expander("🙏 Worship Mode", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            worship_on = st.toggle("🎵 Play Worship Music", value=st.session_state.worship_on, key="worship_toggle")
+            st.session_state.worship_on = worship_on
+        with col2:
+            worship_lang = st.radio("Language:", ["English", "Español"], horizontal=True, key="worship_lang_select")
+            st.session_state.worship_lang = worship_lang
+        
+        if st.session_state.worship_on:
+            # Elevation Worship YouTube streams
+            if st.session_state.worship_lang == "English":
+                # Elevation Worship English
+                st.markdown("""
+                <iframe width="100%" height="80" 
+                src="https://www.youtube.com/embed/OPWPa-HMpj8?autoplay=1&loop=1" 
+                frameborder="0" allow="autoplay; encrypted-media" allowfullscreen>
+                </iframe>
+                <p style="text-align:center;color:#808495;font-size:0.8em;">🎶 Elevation Worship</p>
+                """, unsafe_allow_html=True)
+            else:
+                # Elevation Worship Spanish
+                st.markdown("""
+                <iframe width="100%" height="80" 
+                src="https://www.youtube.com/embed/Rb0S8Z_SaWU?autoplay=1&loop=1" 
+                frameborder="0" allow="autoplay; encrypted-media" allowfullscreen>
+                </iframe>
+                <p style="text-align:center;color:#808495;font-size:0.8em;">🎶 Elevation Worship en Español</p>
+                """, unsafe_allow_html=True)
+            
+            st.markdown('<p style="text-align:center;color:#00FFA3;font-size:0.9em;">✝️ "Trust in the LORD with all your heart" - Proverbs 3:5</p>', unsafe_allow_html=True)
     
     # Status displays
     in_cooldown, cooldown_remaining = is_in_cooldown()
