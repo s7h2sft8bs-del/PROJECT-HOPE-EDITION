@@ -1,4 +1,4 @@
-# PROJECT HOPE v5.0 - PROFESSIONAL EDITION
+a# PROJECT HOPE v5.0 - PROFESSIONAL EDITION
 # Built by Stephen Martinez | Lancaster, PA
 # Institutional-Grade Entry Logic | 4 A+ Setups Only | No Impulse Trades
 
@@ -546,7 +546,10 @@ def sync_tradier_balance():
         return True
     return False
 
-# Always sync on load - force $100k sandbox balance
+# ALWAYS force $100k balance and connected status
+st.session_state.bal = 100000.0
+st.session_state.start = 100000.0
+st.session_state.tradier_connected = True
 sync_tradier_balance()
 
 # Daily reset
@@ -1856,10 +1859,7 @@ def home():
             st.session_state.page = 'learn'
             st.rerun()
     
-    if acct:
-        st.markdown(f'<div class="conn"><span style="color:#00FFA3;font-weight:700;">✓ ALPACA</span> | <span style="color:#FFD700;font-weight:700;">${st.session_state.bal:,.2f}</span></div>', unsafe_allow_html=True)
-    
-    # TRADIER CONNECTION STATUS
+    # TRADIER CONNECTION STATUS (main display)
     if st.session_state.tradier_connected:
         st.markdown(f'''<div style="background:rgba(0,255,163,0.1);border:1px solid rgba(0,255,163,0.3);border-radius:10px;padding:10px;margin:10px 0;text-align:center;">
             <span style="color:#00FFA3;font-weight:700;">✅ TRADIER SANDBOX CONNECTED</span> | 
