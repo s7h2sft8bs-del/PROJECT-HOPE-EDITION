@@ -1819,36 +1819,25 @@ def trade():
     
     # 🎵 WORSHIP MODE
     with st.expander("🙏 Worship Mode", expanded=False):
+        st.markdown('<p style="text-align:center;color:#808495;font-size:0.85em;">Trade with worship playing in the background 🎶</p>', unsafe_allow_html=True)
+        
+        st.markdown("**🇺🇸 English Worship:**")
         col1, col2 = st.columns(2)
         with col1:
-            worship_on = st.toggle("🎵 Play Worship Music", value=st.session_state.worship_on, key="worship_toggle")
-            st.session_state.worship_on = worship_on
+            st.link_button("🎵 Air1 Worship 24/7", "https://www.air1.com/streaming", use_container_width=True)
         with col2:
-            worship_lang = st.radio("Language:", ["English", "Español"], horizontal=True, key="worship_lang_select")
-            st.session_state.worship_lang = worship_lang
+            st.link_button("🎵 K-LOVE Worship", "https://www.klove.com/listen", use_container_width=True)
         
-        if st.session_state.worship_on:
-            # Elevation Worship YouTube streams
-            if st.session_state.worship_lang == "English":
-                # Elevation Worship English
-                st.markdown("""
-                <iframe width="100%" height="80" 
-                src="https://www.youtube.com/embed/OPWPa-HMpj8?autoplay=1&loop=1" 
-                frameborder="0" allow="autoplay; encrypted-media" allowfullscreen>
-                </iframe>
-                <p style="text-align:center;color:#808495;font-size:0.8em;">🎶 Elevation Worship</p>
-                """, unsafe_allow_html=True)
-            else:
-                # Elevation Worship Spanish
-                st.markdown("""
-                <iframe width="100%" height="80" 
-                src="https://www.youtube.com/embed/Rb0S8Z_SaWU?autoplay=1&loop=1" 
-                frameborder="0" allow="autoplay; encrypted-media" allowfullscreen>
-                </iframe>
-                <p style="text-align:center;color:#808495;font-size:0.8em;">🎶 Elevation Worship en Español</p>
-                """, unsafe_allow_html=True)
-            
-            st.markdown('<p style="text-align:center;color:#00FFA3;font-size:0.9em;">✝️ "Trust in the LORD with all your heart" - Proverbs 3:5</p>', unsafe_allow_html=True)
+        st.markdown("**🇪🇸 Adoración en Español:**")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.link_button("🎵 Air1 Música de Adoración", "https://listen.air1.com/musica-de-adoracion", use_container_width=True)
+        with col2:
+            st.link_button("🎵 Radio Cristiana 24h", "https://www.iheart.com/live/air1-musica-de-adoracion-10183/", use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown('<p style="text-align:center;color:#00FFA3;font-size:0.95em;">✝️ "Trust in the LORD with all your heart" - Proverbs 3:5</p>', unsafe_allow_html=True)
+        st.markdown('<p style="text-align:center;color:#808495;font-size:0.8em;">💡 Tip: Open in new tab, then come back to trade!</p>', unsafe_allow_html=True)
     
     # Status displays
     in_cooldown, cooldown_remaining = is_in_cooldown()
