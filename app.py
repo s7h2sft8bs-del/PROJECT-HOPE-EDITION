@@ -534,6 +534,11 @@ for k, v in defs.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
+# FORCE $100k - ALWAYS OVERWRITE
+st.session_state.bal = 100000.0
+st.session_state.start = 100000.0
+st.session_state.tradier_connected = True
+
 # AUTO-SYNC TRADIER BALANCE (every 60 seconds or on first load)
 def sync_tradier_balance():
     """Sync balance from Tradier - runs automatically"""
