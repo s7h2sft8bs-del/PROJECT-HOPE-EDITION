@@ -217,7 +217,7 @@ These apps make money when you lose money. They want you addicted, emotional, an
 
 So I taught myself to code. During lunch breaks. After 10-hour shifts. On weekends when my body was exhausted but my mind wouldn't stop.
 
-Project Hope is my answer. An app that PROTECTS you first. That stops you from blowing up your account. That treats your $200 like it matters - because it does.
+Project Hope is my answer. An app that PROTECTS you first. That stops you from blowing up your account. That treats your $1,000 like it matters - because it does.
 
 This isn't about getting rich quick. It's about building something real, one smart trade at a time.
 
