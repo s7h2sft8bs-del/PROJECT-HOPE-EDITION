@@ -579,8 +579,8 @@ if not st.session_state.premarket_scanned and is_premarket:
 # Get Alpaca account
 acct = get_acct()
 if acct:
-    st.session_state.bal = float(acct.get('cash', 5000))
-    if st.session_state.start == 5000.0:
+    st.session_state.bal = float(acct.get('cash', 100000))
+    if st.session_state.start == 100000.0:
         st.session_state.start = st.session_state.bal
 
 # =============================================================================
@@ -1168,7 +1168,7 @@ def gen_data(stk):
             prices.append(round(max(base * 0.8, min(base * 1.2, prices[-1] + random.gauss(0, base * 0.008))), 2))
         st.session_state.data[sym] = {
             'prices': prices,
-            'volumes': [random.randint(500000, 5000000) for _ in range(100)]
+            'volumes': [random.randint(10000000, 100000000) for _ in range(100)]
         }
     
     d = st.session_state.data[sym]
@@ -1182,7 +1182,7 @@ def gen_data(stk):
         prices.pop(0)
     
     # Update volume
-    new_vol = random.randint(500000, 8000000)
+    new_vol = random.randint(10000000, 8000000)
     volumes.append(new_vol)
     if len(volumes) > 100:
         volumes.pop(0)
@@ -2029,7 +2029,7 @@ I am **NOT** a financial advisor. I am not a licensed broker, investment advisor
 
 def trade():
     # Auto-refresh every 5 seconds - THIS VERSION MADE $105 TODAY
-    st_autorefresh(interval=5000, key="trade_refresh")
+    st_autorefresh(interval=100000, key="trade_refresh")
     
     if st.session_state.tier == 0:
         st.warning("Enter code first")
