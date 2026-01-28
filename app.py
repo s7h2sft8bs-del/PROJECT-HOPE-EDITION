@@ -1,4 +1,4 @@
-a# PROJECT HOPE v5.0 - PROFESSIONAL EDITION
+# PROJECT HOPE v5.0 - PROFESSIONAL EDITION
 # Built by Stephen Martinez | Lancaster, PA
 # Institutional-Grade Entry Logic | 4 A+ Setups Only | No Impulse Trades
 
