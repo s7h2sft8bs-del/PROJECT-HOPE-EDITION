@@ -1843,17 +1843,18 @@ def home():
     
     st.markdown('<div class="hero"><h1>OPTIONS TRADING</h1><p class="sub">Professional Entry Logic</p><p class="tag">4 A+ Setups | Confirmation Required | No Impulse Trades</p></div>', unsafe_allow_html=True)
     
-    # YouTube Welcome Video - small, autoplay muted
+    # YouTube Welcome Video - more square shape
     st.markdown('''<div style="text-align:center;margin:15px 0;">
         <iframe 
-            width="180" 
-            height="320" 
-            src="https://www.youtube.com/embed/706bFBqITXg?autoplay=1&mute=1&loop=1&playlist=706bFBqITXg" 
+            width="200" 
+            height="200" 
+            src="https://www.youtube.com/embed/706bFBqITXg" 
             frameborder="0" 
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
             allowfullscreen
             style="border-radius:10px;border:2px solid #00FFA3;">
         </iframe>
+        <p style="color:#00FFA3;font-size:0.75em;margin:5px 0 0;">▶️ Meet Stephen</p>
     </div>''', unsafe_allow_html=True)
     
     c1, c2, c3, c4 = st.columns(4)
