@@ -1888,9 +1888,10 @@ def home():
             <span style="color:#808495;">Using simulation mode</span>
         </div>''', unsafe_allow_html=True)
     
-    status, ct, cd, _, in_window = mkt()
-    window_text = "🟢 TRADING WINDOW" if in_window else "🔴 OUTSIDE WINDOW"
-    st.markdown(f'<div class="clk {status}"><p style="color:#808495;margin:0;font-size:0.85em;">{ct}</p><p style="font-size:1.3em;font-weight:800;color:#00E5FF;margin:6px 0 0;font-family:monospace;">{cd}</p><p style="font-size:0.8em;margin:4px 0 0;">{window_text}</p></div>', unsafe_allow_html=True)
+    # Just show date (no live clock)
+    today = datetime.now(pytz.timezone('US/Eastern'))
+    date_str = today.strftime('%B %d, %Y')
+    st.markdown(f'<div style="text-align:center;padding:10px;"><p style="color:#00E5FF;font-size:1.1em;font-weight:600;margin:0;">📅 {date_str}</p></div>', unsafe_allow_html=True)
     
     # Premarket Movers Display
     if st.session_state.premarket_movers:
