@@ -323,8 +323,12 @@ def get_option_chain(symbol, expiration=None):
             options = data.get('options', {})
             if options:
                 return options.get('option', [])
-    except:
-        pass
+            else:
+                st.warning(f"No options found for {symbol} exp {expiration}")
+        else:
+            st.warning(f"Tradier API error: {r.status_code}")
+    except Exception as e:
+        st.warning(f"Option chain error: {e}")
     return []
 
 def find_option(symbol, option_type='call', max_price=500):
