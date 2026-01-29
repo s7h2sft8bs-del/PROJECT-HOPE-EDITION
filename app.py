@@ -1843,8 +1843,19 @@ def home():
     
     st.markdown('<div class="hero"><h1>OPTIONS TRADING</h1><p class="sub">Professional Entry Logic</p><p class="tag">4 A+ Setups | Confirmation Required | No Impulse Trades</p></div>', unsafe_allow_html=True)
     
-    # Video button - opens in popup style
-    st.link_button("▶️ Watch: Meet Stephen (2 min)", "https://app.heygen.com/videos/10302438045d408cb992b38828e15d72", use_container_width=False)
+    # YouTube Welcome Video - plays on page
+    st.markdown('''<div style="text-align:center;margin:15px 0;">
+        <iframe 
+            width="280" 
+            height="500" 
+            src="https://www.youtube.com/embed/706bFBqITXg" 
+            frameborder="0" 
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+            allowfullscreen
+            style="border-radius:12px;border:2px solid #00FFA3;">
+        </iframe>
+        <p style="color:#00FFA3;font-size:0.8em;margin:8px 0 0;">👆 Meet Stephen (2 min)</p>
+    </div>''', unsafe_allow_html=True)
     
     c1, c2, c3, c4 = st.columns(4)
     with c1:
