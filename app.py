@@ -1843,6 +1843,19 @@ def home():
     
     st.markdown('<div class="hero"><h1>OPTIONS TRADING</h1><p class="sub">Professional Entry Logic</p><p class="tag">4 A+ Setups | Confirmation Required | No Impulse Trades</p></div>', unsafe_allow_html=True)
     
+    # HEYGEN WELCOME VIDEO
+    st.markdown('''<div style="background:rgba(0,255,163,0.05);border:1px solid rgba(0,255,163,0.2);border-radius:12px;padding:20px;margin:20px 0;text-align:center;">
+        <p style="color:#00FFA3;font-weight:600;margin:0 0 15px 0;">📺 Watch: Meet Stephen & Learn How It Works</p>
+        <iframe 
+            src="https://app.heygen.com/embed/10302438045d408cb992b38828e15d72" 
+            width="100%" 
+            height="400" 
+            style="border:none;border-radius:8px;max-width:700px;"
+            allow="autoplay; encrypted-media"
+            allowfullscreen>
+        </iframe>
+    </div>''', unsafe_allow_html=True)
+    
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.button("Home", disabled=True, use_container_width=True)
