@@ -99,6 +99,10 @@ TIERS = {
 # =============================================================================
 # Core watchlist - high volume, options-friendly stocks
 STOCKS_CORE = [
+    # ETFs for Market Direction - MOST IMPORTANT
+    {"s": "SPY", "n": "S&P 500 ETF", "p": 520.00},
+    {"s": "QQQ", "n": "Nasdaq ETF", "p": 450.00},
+    
     # Tech & Growth
     {"s": "AAPL", "n": "Apple", "p": 185.00},
     {"s": "MSFT", "n": "Microsoft", "p": 420.00},
@@ -123,9 +127,7 @@ STOCKS_CORE = [
     {"s": "LCID", "n": "Lucid Motors", "p": 2.80},
     {"s": "AMC", "n": "AMC Entertainment", "p": 3.20},
     
-    # ETFs for Market Direction
-    {"s": "SPY", "n": "S&P 500 ETF", "p": 520.00},
-    {"s": "QQQ", "n": "Nasdaq ETF", "p": 450.00},
+    # More ETFs
     {"s": "IWM", "n": "Russell 2000 ETF", "p": 210.00},
     
     # Financials
@@ -1391,8 +1393,8 @@ def analyze_stock(stk):
 
 def scan():
     """Scan stocks and sort by HOT score"""
-    # Limit to 15 stocks for speed
-    watchlist = STOCKS_CORE[:15]
+    # Scan ALL stocks, then return top by HOT score
+    watchlist = STOCKS_CORE  # Scan all 40+
     
     # Analyze each stock
     results = []
@@ -1403,7 +1405,7 @@ def scan():
         except:
             continue
     
-    # Sort by HOT score
+    # Sort by HOT score - best opportunities first
     return sorted(results, key=lambda x: x['hot_score'], reverse=True)
 
 # =============================================================================
