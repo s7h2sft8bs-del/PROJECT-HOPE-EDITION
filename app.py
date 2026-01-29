@@ -384,12 +384,19 @@ def place_tradier_order(symbol, side, quantity, order_type='market', price=None)
         }
         if price and order_type == 'limit':
             data['price'] = price
+        
+        st.info(f"📤 Sending to Tradier: {data}")
             
         r = requests.post(f"{TRADIER_URL}/accounts/{TRADIER_ACCOUNT}/orders",
                          headers=tradier_headers(),
                          data=data, timeout=10)
-        if r.status_code == 200:
+        
+        st.info(f"📥 Tradier status: {r.status_code}")
+        
+        if r.status_code in [200, 201]:
             return r.json()
+        else:
+            st.error(f"Tradier error {r.status_code}: {r.text}")
     except Exception as e:
         st.error(f"Order error: {e}")
     return None
