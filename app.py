@@ -335,14 +335,29 @@ def find_option(symbol, option_type='call', max_price=500):
     """Find an appropriate option to trade"""
     chain = get_option_chain(symbol)
     if not chain:
+        st.warning(f"❌ Empty option chain for {symbol}")
         return None
+    
+    st.info(f"📊 Got {len(chain)} options for {symbol}")
     
     stock_price = get_tradier_quote(symbol)
     if not stock_price:
-        return None
+        # Fallback to Alpaca price
+        stock_price = get_price(symbol)
+        if not stock_price:
+            st.warning(f"❌ Cannot get stock price for {symbol}")
+            return None
+    
+    st.info(f"💵 Stock price: ${stock_price}")
     
     # Filter by type and find ATM option
     options = [o for o in chain if o.get('option_type') == option_type]
+    
+    if not options:
+        st.warning(f"❌ No {option_type} options in chain")
+        return None
+    
+    st.info(f"🔍 Found {len(options)} {option_type} options")
     
     # Sort by how close strike is to current price
     options.sort(key=lambda x: abs(x.get('strike', 0) - stock_price))
@@ -353,6 +368,7 @@ def find_option(symbol, option_type='call', max_price=500):
         if ask and ask * 100 <= max_price:  # Convert to contract price
             return opt
     
+    st.warning(f"❌ No options within ${max_price} budget")
     return None
 
 def place_tradier_order(symbol, side, quantity, order_type='market', price=None):
@@ -380,34 +396,46 @@ def place_tradier_order(symbol, side, quantity, order_type='market', price=None)
 
 def buy_option_tradier(symbol, option_type, position_size):
     """Buy an option through Tradier - REAL PAPER TRADING"""
+    st.info(f"🔍 Looking for {option_type.upper()} option on {symbol}...")
+    
     # Find appropriate option
     opt = find_option(symbol, option_type.lower(), position_size)
     if not opt:
+        st.warning(f"❌ No {option_type} option found for {symbol}")
         return False, "No suitable option found"
     
     option_symbol = opt.get('symbol')
     ask_price = opt.get('ask', 0) or opt.get('last', 0)
     
+    st.info(f"📋 Found option: {option_symbol} @ ${ask_price}")
+    
     if not ask_price or ask_price <= 0:
+        st.warning(f"❌ Invalid price for {option_symbol}")
         return False, "Invalid option price"
     
     # Calculate quantity (how many contracts we can afford)
     contract_cost = ask_price * 100
     qty = max(1, int(position_size / contract_cost))
     
+    st.info(f"📝 Placing order: {qty}x {option_symbol} @ ${ask_price}")
+    
     # Place the order
     result = place_tradier_order(option_symbol, 'buy_to_open', qty)
     
-    if result and result.get('order'):
-        return True, {
-            'option_symbol': option_symbol,
-            'strike': opt.get('strike'),
-            'expiration': opt.get('expiration_date'),
-            'qty': qty,
-            'entry_price': ask_price,
-            'order_id': result['order'].get('id')
-        }
+    if result:
+        st.info(f"📨 Tradier response: {result}")
+        if result.get('order'):
+            st.success(f"✅ ORDER PLACED: {qty}x {option_symbol}")
+            return True, {
+                'option_symbol': option_symbol,
+                'strike': opt.get('strike'),
+                'expiration': opt.get('expiration_date'),
+                'qty': qty,
+                'entry_price': ask_price,
+                'order_id': result['order'].get('id')
+            }
     
+    st.warning(f"❌ Order failed - Tradier did not confirm")
     return False, "Order failed"
 
 def sell_option_tradier(option_symbol, qty):
