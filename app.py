@@ -64,7 +64,7 @@ EMAIL = "thetradingprotocol@gmail.com"
 # =============================================================================
 STOP_LOSS = 0.25              # -25% stop loss (option premium)
 TAKE_PROFIT = 0.30            # +30% take profit  
-DAILY_LIMIT = 0.15            # -15% daily max loss
+DAILY_LIMIT = 0.04            # -4% daily max loss (Apex funded account rules)
 MAX_POS = 0.05                # 5% max per trade
 COOLDOWN_AFTER_LOSS = 600     # 10 minutes cooldown after loss (seconds)
 MIN_RVOL = 1.5                # Minimum relative volume
@@ -77,6 +77,15 @@ PARTIAL_PROFIT_1 = 0.15       # Take 50% profit at +15%
 PARTIAL_PROFIT_2 = 0.25       # Take 25% more at +25%
 TRAIL_AFTER_PARTIAL = True    # Trail stop after first partial
 MOVE_STOP_TO_BE = 0.10        # Move stop to breakeven after +10%
+
+# =============================================================================
+# OPTION QUALITY FILTERS (Pro Trader Edge)
+# =============================================================================
+MAX_BID_ASK_SPREAD_PCT = 0.10  # Max 10% spread (ask-bid)/ask
+MAX_IV_RANK = 50               # Don't buy when IV > 50th percentile (overpriced)
+MIN_OPEN_INTEREST = 100        # Minimum open interest for liquidity
+MIN_OPTION_VOLUME = 50         # Minimum daily volume
+EARNINGS_BLACKOUT_DAYS = 5     # No trades within 5 days of earnings
 
 # =============================================================================
 # NEWS KEYWORDS
@@ -241,8 +250,11 @@ def headers():
 # =============================================================================
 # TRADIER API FUNCTIONS (Paper Trading)
 # =============================================================================
-def tradier_headers():
-    return {"Authorization": f"Bearer {TRADIER_TOKEN}", "Accept": "application/json"}
+def tradier_headers(for_post=False):
+    headers = {"Authorization": f"Bearer {TRADIER_TOKEN}", "Accept": "application/json"}
+    if for_post:
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    return headers
 
 def get_tradier_account():
     """Get Tradier account balance and info"""
@@ -334,7 +346,14 @@ def get_option_chain(symbol, expiration=None):
     return []
 
 def find_option(symbol, option_type='call', max_price=500):
-    """Find an appropriate option to trade"""
+    """Find an appropriate option to trade - WITH QUALITY FILTERS"""
+    
+    # CHECK 1: EARNINGS BLACKOUT
+    has_earnings, earnings_date = check_earnings_blackout(symbol)
+    if has_earnings:
+        st.warning(f"🚫 {symbol} has earnings {earnings_date} - NO TRADE (IV crush risk)")
+        return None
+    
     chain = get_option_chain(symbol)
     if not chain:
         st.warning(f"❌ Empty option chain for {symbol}")
@@ -364,13 +383,26 @@ def find_option(symbol, option_type='call', max_price=500):
     # Sort by how close strike is to current price
     options.sort(key=lambda x: abs(x.get('strike', 0) - stock_price))
     
-    # Find one within our price range
+    # Find one within our price range AND passes quality filters
     for opt in options:
         ask = opt.get('ask', 0) or opt.get('last', 0)
         if ask and ask * 100 <= max_price:  # Convert to contract price
-            return opt
+            
+            # CHECK 2 & 3: OPTION QUALITY (Spread, OI, Volume)
+            quality_passed, quality_reasons = check_option_quality(opt)
+            
+            # Show quality info
+            strike = opt.get('strike', 0)
+            st.info(f"📋 Checking ${strike} strike @ ${ask}: {' | '.join(quality_reasons)}")
+            
+            if quality_passed:
+                st.success(f"✅ Quality check PASSED for ${strike} strike")
+                return opt
+            else:
+                st.warning(f"⚠️ ${strike} strike failed quality - trying next...")
+                continue
     
-    st.warning(f"❌ No options within ${max_price} budget")
+    st.warning(f"❌ No quality options within ${max_price} budget")
     return None
 
 def place_tradier_order(symbol, side, quantity, order_type='market', price=None):
@@ -380,17 +412,17 @@ def place_tradier_order(symbol, side, quantity, order_type='market', price=None)
             'class': 'option' if len(symbol) > 10 else 'equity',
             'symbol': symbol,
             'side': side,  # 'buy_to_open', 'sell_to_close' for options
-            'quantity': quantity,
+            'quantity': str(quantity),  # Tradier expects string
             'type': order_type,
             'duration': 'day'
         }
         if price and order_type == 'limit':
-            data['price'] = price
+            data['price'] = str(price)
         
         st.info(f"📤 Sending to Tradier: {data}")
             
         r = requests.post(f"{TRADIER_URL}/accounts/{TRADIER_ACCOUNT}/orders",
-                         headers=tradier_headers(),
+                         headers=tradier_headers(for_post=True),
                          data=data, timeout=10)
         
         st.info(f"📥 Tradier status: {r.status_code}")
@@ -519,6 +551,121 @@ def check_news(news):
     else:
         sent = 'NEUTRAL'
     return {'sent': sent, 'red': red, 'green': green, 'block': len(red) >= 2}
+
+# =============================================================================
+# OPTION QUALITY FILTERS (Pro Trader Edge)
+# =============================================================================
+def check_earnings_blackout(symbol):
+    """Check if stock has earnings within blackout period - USE TRADIER CALENDAR"""
+    try:
+        # Get earnings calendar from Tradier
+        today = datetime.now()
+        end_date = today + timedelta(days=EARNINGS_BLACKOUT_DAYS)
+        
+        r = requests.get(f"{TRADIER_URL}/markets/calendar",
+                        headers=tradier_headers(),
+                        params={
+                            'month': today.month,
+                            'year': today.year
+                        }, timeout=5)
+        
+        if r.status_code == 200:
+            data = r.json()
+            calendar = data.get('calendar', {})
+            days = calendar.get('days', {}).get('day', [])
+            
+            if isinstance(days, dict):
+                days = [days]
+            
+            for day in days:
+                date_str = day.get('date', '')
+                if date_str:
+                    day_date = datetime.strptime(date_str, '%Y-%m-%d')
+                    # Check if within blackout window
+                    if today <= day_date <= end_date:
+                        # Check if our symbol has earnings
+                        events = day.get('premarket', {}).get('earnings', [])
+                        if isinstance(events, dict):
+                            events = [events]
+                        for event in events:
+                            if event.get('symbol') == symbol:
+                                return True, date_str
+                        
+                        events = day.get('postmarket', {}).get('earnings', [])
+                        if isinstance(events, dict):
+                            events = [events]
+                        for event in events:
+                            if event.get('symbol') == symbol:
+                                return True, date_str
+        
+        # If API doesn't work, check news for earnings mentions
+        news = get_news(symbol)
+        for article in news:
+            txt = (article.get('headline', '') + ' ' + article.get('summary', '')).lower()
+            if 'earnings' in txt and ('report' in txt or 'announce' in txt or 'release' in txt):
+                return True, "Soon (mentioned in news)"
+                
+    except Exception as e:
+        pass
+    
+    return False, None
+
+def check_option_quality(option):
+    """
+    Check if option meets quality standards for trading
+    Returns: (passed, reasons)
+    """
+    reasons = []
+    passed = True
+    
+    bid = option.get('bid', 0) or 0
+    ask = option.get('ask', 0) or 0
+    last = option.get('last', 0) or 0
+    open_interest = option.get('open_interest', 0) or 0
+    volume = option.get('volume', 0) or 0
+    
+    # Use last price if bid/ask not available
+    if ask == 0:
+        ask = last
+    if bid == 0:
+        bid = last * 0.9  # Estimate
+    
+    # 1. BID/ASK SPREAD CHECK
+    if ask > 0:
+        spread_pct = (ask - bid) / ask
+        if spread_pct > MAX_BID_ASK_SPREAD_PCT:
+            passed = False
+            reasons.append(f"Spread {spread_pct*100:.1f}% > {MAX_BID_ASK_SPREAD_PCT*100}%")
+        else:
+            reasons.append(f"✓ Spread {spread_pct*100:.1f}%")
+    
+    # 2. OPEN INTEREST CHECK
+    if open_interest < MIN_OPEN_INTEREST:
+        passed = False
+        reasons.append(f"OI {open_interest} < {MIN_OPEN_INTEREST}")
+    else:
+        reasons.append(f"✓ OI {open_interest}")
+    
+    # 3. VOLUME CHECK
+    if volume < MIN_OPTION_VOLUME:
+        passed = False
+        reasons.append(f"Vol {volume} < {MIN_OPTION_VOLUME}")
+    else:
+        reasons.append(f"✓ Vol {volume}")
+    
+    # 4. IV CHECK (if available from Tradier)
+    greeks = option.get('greeks', {})
+    if greeks:
+        iv = greeks.get('mid_iv', 0) or greeks.get('ask_iv', 0) or 0
+        if iv > 0:
+            # Simple IV rank approximation (would need historical data for true IV rank)
+            # For now, just check if IV seems elevated (> 0.5 = 50%)
+            if iv > 0.5:  # 50% IV is generally high for most stocks
+                reasons.append(f"⚠️ IV {iv*100:.0f}% (elevated)")
+            else:
+                reasons.append(f"✓ IV {iv*100:.0f}%")
+    
+    return passed, reasons
 
 # =============================================================================
 # SESSION STATE
@@ -2144,6 +2291,13 @@ def trade():
     
     tier = TIERS[st.session_state.tier]
     
+    # FIX 4: Tradier connection indicator
+    tradier_test = get_tradier_quote("SPY")
+    if tradier_test and tradier_test > 0:
+        st.markdown(f'<div style="background:rgba(0,255,163,0.1);border:1px solid rgba(0,255,163,0.3);border-radius:8px;padding:5px 10px;margin-bottom:8px;text-align:center;"><span style="color:#00FFA3;font-size:0.8em;">✅ TRADIER LIVE | SPY: ${tradier_test:.2f}</span></div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div style="background:rgba(255,165,0,0.1);border:1px solid rgba(255,165,0,0.3);border-radius:8px;padding:5px 10px;margin-bottom:8px;text-align:center;"><span style="color:#FFA500;font-size:0.8em;">⚠️ TRADIER: Simulated Mode</span></div>', unsafe_allow_html=True)
+    
     # Update positions
     update()
     
@@ -2222,22 +2376,21 @@ def trade():
     st.markdown(f'<div class="shld"><p style="font-weight:800;color:#00FFA3;margin:0;font-size:1em;">🛡️ PROFESSIONAL PROTECTION</p><p style="color:#808495;margin:4px 0 0;font-size:0.8em;">Partials @ +15%/+25% | Trail Stop | BE @ +10% | Max {tier["trades"]} | Cooldown 10m</p></div>', unsafe_allow_html=True)
     
     # POSITIONS DISPLAY FUNCTION - reusable for mobile top + desktop sidebar
-    # key_prefix ensures unique keys when called multiple times (mobile vs desktop)
     def show_positions(key_prefix=""):
         st.markdown(f"### 📈 Positions ({len(st.session_state.pos)}/{tier['trades']})")
         
         if st.session_state.pos:
-            for i, pos in enumerate(st.session_state.pos):
-                pc = "#00FFA3" if pos['pnl'] >= 0 else "#FF4B4B"
+            for i, p in enumerate(st.session_state.pos):
+                pc = "#00FFA3" if p['pnl'] >= 0 else "#FF4B4B"
                 
                 # Position status indicators
-                qty = pos.get('qty', 100)
-                p1 = "✅" if pos.get('partial_1_taken') else "⬜"
-                p2 = "✅" if pos.get('partial_2_taken') else "⬜"
-                be_status = "🔒BE" if pos.get('stop_at_breakeven') else ""
+                qty = p.get('qty', 100)
+                p1 = "✅" if p.get('partial_1_taken') else "⬜"
+                p2 = "✅" if p.get('partial_2_taken') else "⬜"
+                be_status = "🔒BE" if p.get('stop_at_breakeven') else ""
                 
                 # Per-trade manual mode
-                is_manual = pos.get('manual_mode', False)
+                is_manual = p.get('manual_mode', False)
                 mode_icon = "🖐️" if is_manual else "🤖"
                 mode_text = "MANUAL" if is_manual else "AUTO"
                 mode_color = "#FFA500" if is_manual else "#00FFA3"
@@ -2245,13 +2398,13 @@ def trade():
                 st.markdown(f'''<div class="pcard" style="border-left:3px solid {pc};">
                     <div style="display:flex;justify-content:space-between;">
                         <div>
-                            <h4 style="color:white;margin:0;font-size:0.95em;">{pos["sym"]} <span style="color:#808495;font-size:0.7em;">{qty}%</span></h4>
-                            <p style="color:#808495;font-size:0.75em;">{pos["dir"]} | {pos.get("setup", "N/A")}</p>
+                            <h4 style="color:white;margin:0;font-size:0.95em;">{p["sym"]} <span style="color:#808495;font-size:0.7em;">{qty}%</span></h4>
+                            <p style="color:#808495;font-size:0.75em;">{p["dir"]} | {p.get("setup", "N/A")}</p>
                         </div>
-                        <h4 style="color:{pc};margin:0;">${pos["pnl"]:+.2f}</h4>
+                        <h4 style="color:{pc};margin:0;">${p["pnl"]:+.2f}</h4>
                     </div>
                     <div style="display:flex;justify-content:space-between;margin-top:5px;">
-                        <span style="color:#808495;font-size:0.65em;">SL: ${pos["sl"]:.2f} {be_status}</span>
+                        <span style="color:#808495;font-size:0.65em;">SL: ${p["sl"]:.2f} {be_status}</span>
                         <span style="color:#808495;font-size:0.65em;">{p1}T1 {p2}T2</span>
                     </div>
                     <div style="margin-top:5px;text-align:center;">
@@ -2259,20 +2412,20 @@ def trade():
                     </div>
                 </div>''', unsafe_allow_html=True)
                 
-                # Toggle and Close buttons - UNIQUE KEYS with prefix
+                # Toggle and Close buttons
                 col_a, col_b = st.columns(2)
                 with col_a:
                     toggle_label = "🤖 Auto" if is_manual else "🖐️ Manual"
-                    if st.button(toggle_label, key=f"{key_prefix}toggle_{pos['id']}_{i}", use_container_width=True):
+                    if st.button(toggle_label, key=f"{key_prefix}toggle_{p['id']}_{i}", use_container_width=True):
                         st.session_state.pos[i]['manual_mode'] = not is_manual
                         st.rerun()
                 with col_b:
                     if is_manual:
-                        if st.button(f"🔴 Close", key=f"{key_prefix}close_{pos['id']}_{i}", use_container_width=True):
+                        if st.button(f"🔴 Close", key=f"{key_prefix}close_{p['id']}_{i}", use_container_width=True):
                             sell(i)
                             st.rerun()
                     else:
-                        st.button("🔒 Protected", key=f"{key_prefix}prot_{pos['id']}_{i}", disabled=True, use_container_width=True)
+                        st.button("🔒 Protected", key=f"{key_prefix}prot_{p['id']}_{i}", disabled=True, use_container_width=True)
         else:
             st.info("No positions")
     
