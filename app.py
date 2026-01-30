@@ -668,6 +668,41 @@ def check_option_quality(option):
     return passed, reasons
 
 # =============================================================================
+# DATA PERSISTENCE (Save trades to file)
+# =============================================================================
+import json
+import os
+
+TRADE_DATA_FILE = "trade_history.json"
+
+def save_trade_data():
+    """Save trading data to JSON file"""
+    try:
+        data = {
+            'trades': st.session_state.trades,
+            'wins': st.session_state.wins,
+            'losses': st.session_state.losses,
+            'total': st.session_state.total,
+            'setup_stats': st.session_state.setup_stats,
+            'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        with open(TRADE_DATA_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        pass  # Silent fail - don't break app
+
+def load_trade_data():
+    """Load trading data from JSON file"""
+    try:
+        if os.path.exists(TRADE_DATA_FILE):
+            with open(TRADE_DATA_FILE, 'r') as f:
+                data = json.load(f)
+                return data
+    except Exception as e:
+        pass
+    return None
+
+# =============================================================================
 # SESSION STATE
 # =============================================================================
 defs = {
@@ -721,6 +756,17 @@ defs = {
 for k, v in defs.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+# LOAD SAVED TRADE DATA (persists across restarts)
+if 'data_loaded' not in st.session_state:
+    saved_data = load_trade_data()
+    if saved_data:
+        st.session_state.trades = saved_data.get('trades', [])
+        st.session_state.wins = saved_data.get('wins', 0)
+        st.session_state.losses = saved_data.get('losses', 0)
+        st.session_state.total = saved_data.get('total', 0.0)
+        st.session_state.setup_stats = saved_data.get('setup_stats', st.session_state.setup_stats)
+    st.session_state.data_loaded = True
 
 # FORCE $100k - ALWAYS OVERWRITE
 st.session_state.bal = 100000.0
@@ -1890,6 +1936,9 @@ def sell(i, partial_pct=None):
         'entry': p['entry'],
         'exit': p['cur'],
     })
+    
+    # SAVE DATA TO FILE (persists across restarts)
+    save_trade_data()
     
     tick('SELL', p['sym'], p['dir'])
     st.session_state.pos.pop(i)
