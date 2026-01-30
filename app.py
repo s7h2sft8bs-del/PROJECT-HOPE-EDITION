@@ -437,7 +437,7 @@ def place_tradier_order(symbol, side, quantity, order_type='market', price=None)
 
 def buy_option_tradier(symbol, option_type, position_size):
     """Buy an option through Tradier - REAL PAPER TRADING"""
-    st.info(f"🔍 Looking for {option_type.upper()} option on {symbol}...")
+    st.info(f"🔍 Looking for {option_type.upper()} option on {symbol}... (Budget: ${position_size:.2f})")
     
     # Find appropriate option
     opt = find_option(symbol, option_type.lower(), position_size)
@@ -458,23 +458,29 @@ def buy_option_tradier(symbol, option_type, position_size):
     contract_cost = ask_price * 100
     qty = max(1, int(position_size / contract_cost))
     
-    st.info(f"📝 Placing order: {qty}x {option_symbol} @ ${ask_price}")
+    st.info(f"📝 Placing order: {qty}x {option_symbol} @ ${ask_price} (Cost: ${contract_cost * qty:.2f})")
     
     # Place the order
     result = place_tradier_order(option_symbol, 'buy_to_open', qty)
     
+    st.info(f"📨 Tradier raw response: {result}")
+    
     if result:
-        st.info(f"📨 Tradier response: {result}")
         if result.get('order'):
-            st.success(f"✅ ORDER PLACED: {qty}x {option_symbol}")
+            order_id = result['order'].get('id')
+            order_status = result['order'].get('status', 'unknown')
+            st.success(f"✅ ORDER PLACED: ID={order_id} Status={order_status}")
             return True, {
                 'option_symbol': option_symbol,
                 'strike': opt.get('strike'),
                 'expiration': opt.get('expiration_date'),
                 'qty': qty,
                 'entry_price': ask_price,
-                'order_id': result['order'].get('id')
+                'order_id': order_id
             }
+        elif result.get('errors'):
+            st.error(f"❌ Tradier errors: {result.get('errors')}")
+            return False, f"Tradier error: {result.get('errors')}"
     
     st.warning(f"❌ Order failed - Tradier did not confirm")
     return False, "Order failed"
@@ -1815,15 +1821,24 @@ def buy(stk, direction):
     
     # Try to place REAL order through Tradier
     option_type = 'call' if direction == 'CALL' else 'put'
-    success, result = buy_option_tradier(stk['sym'], option_type, position_size)
+    
+    try:
+        success, result = buy_option_tradier(stk['sym'], option_type, position_size)
+    except Exception as e:
+        st.error(f"Tradier error: {e}")
+        success = False
+        result = str(e)
     
     if not success:
         # Fallback to simulation if Tradier fails
         st.warning(f"Tradier order failed: {result}. Using simulation.")
-        cost = stk['oc'] * 100
+        # Get a reasonable option price for simulation
+        stock_price = get_tradier_quote(stk['sym']) or get_price(stk['sym']) or 100
+        # Simulate ATM option price (~2-5% of stock price)
+        entry_price = round(stock_price * 0.03, 2)  # ~3% of stock price
         option_symbol = f"{stk['sym']}_{direction}_SIM"
-        entry_price = stk['oc']
         qty = 1
+        cost = entry_price * 100  # 1 contract
     else:
         # Real Tradier order went through!
         option_symbol = result['option_symbol']
@@ -2000,27 +2015,29 @@ def update():
                 sell(i)
                 return
             
-            # TAKE PROFIT CHECK (final target)
-            if p['cur'] >= p['tp']:
+            # TAKE PROFIT CHECK (final target +30%)
+            if gain_pct >= TAKE_PROFIT:
                 sell(i)
                 return
             
             # PARTIAL PROFIT 1: Take 50% at +15%
-            if gain_pct >= PARTIAL_PROFIT_1 and not p.get('partial_1_taken') and p.get('qty', 100) >= 50:
-                sell(i, partial_pct=50)
+            if gain_pct >= PARTIAL_PROFIT_1 and not p.get('partial_1_taken'):
                 p['partial_1_taken'] = True
-                p['qty'] = 50
+                p['qty_pct'] = 50  # 50% remaining
                 # Move stop to breakeven
                 if TRAIL_AFTER_PARTIAL:
                     p['stop_at_breakeven'] = True
                     p['sl'] = p['entry']  # Breakeven
+                # Log the partial
+                tick('PARTIAL T1', p['sym'], '+15%')
                 return
             
             # PARTIAL PROFIT 2: Take 25% at +25%
-            if gain_pct >= PARTIAL_PROFIT_2 and not p.get('partial_2_taken') and p.get('qty', 100) >= 25:
-                sell(i, partial_pct=25)
+            if gain_pct >= PARTIAL_PROFIT_2 and not p.get('partial_2_taken'):
                 p['partial_2_taken'] = True
-                p['qty'] = 25
+                p['qty_pct'] = 25  # 25% remaining
+                # Log the partial
+                tick('PARTIAL T2', p['sym'], '+25%')
                 return
             
             # MOVE STOP TO BREAKEVEN at +10% (if not already)
