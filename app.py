@@ -1865,7 +1865,7 @@ def buy(stk, direction):
     return True, "OK"
 
 def sell(i, partial_pct=None):
-    """Execute sell - supports partial sells"""
+    """Execute sell - supports partial sells - CALLS TRADIER TO CLOSE"""
     if i >= len(st.session_state.pos):
         return
     
@@ -1874,21 +1874,33 @@ def sell(i, partial_pct=None):
     # Determine quantity to sell
     if partial_pct is None:
         # Full close - sell remaining qty
-        sell_qty = p.get('qty', 100)
+        sell_qty = p.get('qty', 1)
     else:
-        sell_qty = partial_pct
+        # Partial - calculate actual contracts
+        total_qty = p.get('qty', 1)
+        sell_qty = max(1, int(total_qty * partial_pct / 100))
     
-    # Calculate P/L for this sale
-    pnl_this_sale = (p['cur'] - p['entry']) * sell_qty
+    # ACTUALLY CLOSE ON TRADIER if this is a live trade
+    if p.get('is_live') and p.get('option_symbol'):
+        st.info(f"📤 Closing {sell_qty}x {p['option_symbol']} on Tradier...")
+        tradier_result = sell_option_tradier(p['option_symbol'], sell_qty)
+        if tradier_result:
+            st.success(f"✅ TRADIER CLOSE CONFIRMED")
+        else:
+            st.warning(f"⚠️ Tradier close may have failed - check account")
+    
+    # Calculate P/L for this sale (with contract multiplier)
+    pnl_this_sale = (p['cur'] - p['entry']) * sell_qty * 100
     
     # Add to balance (return cost basis + P/L)
-    st.session_state.bal += (p['entry'] * sell_qty) + pnl_this_sale
+    cost_basis = p['entry'] * sell_qty * 100
+    st.session_state.bal += cost_basis + pnl_this_sale
     
-    if partial_pct is not None and p.get('qty', 100) > sell_qty:
+    if partial_pct is not None and p.get('qty', 1) > sell_qty:
         # Partial sale - update position but don't remove
-        p['qty'] = p.get('qty', 100) - sell_qty
+        p['qty'] = p.get('qty', 1) - sell_qty
         p['realized_pnl'] = p.get('realized_pnl', 0) + pnl_this_sale
-        tick('PARTIAL', p['sym'], f"{sell_qty}%")
+        tick('PARTIAL', p['sym'], f"{partial_pct}%")
         return  # Don't remove position yet
     
     # Full close (either explicit or qty depleted)
