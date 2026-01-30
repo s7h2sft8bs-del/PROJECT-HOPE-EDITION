@@ -2222,21 +2222,22 @@ def trade():
     st.markdown(f'<div class="shld"><p style="font-weight:800;color:#00FFA3;margin:0;font-size:1em;">🛡️ PROFESSIONAL PROTECTION</p><p style="color:#808495;margin:4px 0 0;font-size:0.8em;">Partials @ +15%/+25% | Trail Stop | BE @ +10% | Max {tier["trades"]} | Cooldown 10m</p></div>', unsafe_allow_html=True)
     
     # POSITIONS DISPLAY FUNCTION - reusable for mobile top + desktop sidebar
-    def show_positions():
+    # key_prefix ensures unique keys when called multiple times (mobile vs desktop)
+    def show_positions(key_prefix=""):
         st.markdown(f"### 📈 Positions ({len(st.session_state.pos)}/{tier['trades']})")
         
         if st.session_state.pos:
-            for i, p in enumerate(st.session_state.pos):
-                pc = "#00FFA3" if p['pnl'] >= 0 else "#FF4B4B"
+            for i, pos in enumerate(st.session_state.pos):
+                pc = "#00FFA3" if pos['pnl'] >= 0 else "#FF4B4B"
                 
                 # Position status indicators
-                qty = p.get('qty', 100)
-                p1 = "✅" if p.get('partial_1_taken') else "⬜"
-                p2 = "✅" if p.get('partial_2_taken') else "⬜"
-                be_status = "🔒BE" if p.get('stop_at_breakeven') else ""
+                qty = pos.get('qty', 100)
+                p1 = "✅" if pos.get('partial_1_taken') else "⬜"
+                p2 = "✅" if pos.get('partial_2_taken') else "⬜"
+                be_status = "🔒BE" if pos.get('stop_at_breakeven') else ""
                 
                 # Per-trade manual mode
-                is_manual = p.get('manual_mode', False)
+                is_manual = pos.get('manual_mode', False)
                 mode_icon = "🖐️" if is_manual else "🤖"
                 mode_text = "MANUAL" if is_manual else "AUTO"
                 mode_color = "#FFA500" if is_manual else "#00FFA3"
@@ -2244,13 +2245,13 @@ def trade():
                 st.markdown(f'''<div class="pcard" style="border-left:3px solid {pc};">
                     <div style="display:flex;justify-content:space-between;">
                         <div>
-                            <h4 style="color:white;margin:0;font-size:0.95em;">{p["sym"]} <span style="color:#808495;font-size:0.7em;">{qty}%</span></h4>
-                            <p style="color:#808495;font-size:0.75em;">{p["dir"]} | {p.get("setup", "N/A")}</p>
+                            <h4 style="color:white;margin:0;font-size:0.95em;">{pos["sym"]} <span style="color:#808495;font-size:0.7em;">{qty}%</span></h4>
+                            <p style="color:#808495;font-size:0.75em;">{pos["dir"]} | {pos.get("setup", "N/A")}</p>
                         </div>
-                        <h4 style="color:{pc};margin:0;">${p["pnl"]:+.2f}</h4>
+                        <h4 style="color:{pc};margin:0;">${pos["pnl"]:+.2f}</h4>
                     </div>
                     <div style="display:flex;justify-content:space-between;margin-top:5px;">
-                        <span style="color:#808495;font-size:0.65em;">SL: ${p["sl"]:.2f} {be_status}</span>
+                        <span style="color:#808495;font-size:0.65em;">SL: ${pos["sl"]:.2f} {be_status}</span>
                         <span style="color:#808495;font-size:0.65em;">{p1}T1 {p2}T2</span>
                     </div>
                     <div style="margin-top:5px;text-align:center;">
@@ -2258,20 +2259,20 @@ def trade():
                     </div>
                 </div>''', unsafe_allow_html=True)
                 
-                # Toggle and Close buttons
+                # Toggle and Close buttons - UNIQUE KEYS with prefix
                 col_a, col_b = st.columns(2)
                 with col_a:
                     toggle_label = "🤖 Auto" if is_manual else "🖐️ Manual"
-                    if st.button(toggle_label, key=f"toggle_{p['id']}_{i}", use_container_width=True):
+                    if st.button(toggle_label, key=f"{key_prefix}toggle_{pos['id']}_{i}", use_container_width=True):
                         st.session_state.pos[i]['manual_mode'] = not is_manual
                         st.rerun()
                 with col_b:
                     if is_manual:
-                        if st.button(f"🔴 Close", key=f"close_{p['id']}_{i}", use_container_width=True):
+                        if st.button(f"🔴 Close", key=f"{key_prefix}close_{pos['id']}_{i}", use_container_width=True):
                             sell(i)
                             st.rerun()
                     else:
-                        st.button("🔒 Protected", key=f"prot_{p['id']}_{i}", disabled=True, use_container_width=True)
+                        st.button("🔒 Protected", key=f"{key_prefix}prot_{pos['id']}_{i}", disabled=True, use_container_width=True)
         else:
             st.info("No positions")
     
@@ -2285,7 +2286,7 @@ def trade():
         
         # Mobile positions (shows only on small screens)
         st.markdown('<div class="mobile-positions">', unsafe_allow_html=True)
-        show_positions()
+        show_positions(key_prefix="mob_")
         st.markdown('</div>', unsafe_allow_html=True)
     
     # Main content - Scanner (left) and Positions (right on desktop)
@@ -2363,7 +2364,7 @@ def trade():
     # Desktop positions (right column - hidden on mobile via CSS)
     with col2:
         st.markdown('<div class="desktop-positions">', unsafe_allow_html=True)
-        show_positions()
+        show_positions(key_prefix="desk_")
         st.markdown('</div>', unsafe_allow_html=True)
         
         st.markdown("### 📜 Ticker")
