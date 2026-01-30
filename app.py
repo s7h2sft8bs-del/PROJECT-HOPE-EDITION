@@ -419,38 +419,49 @@ def place_tradier_order(symbol, side, quantity, order_type='market', price=None)
         if price and order_type == 'limit':
             data['price'] = str(price)
         
+        print(f"[TRADIER] Sending order: {data}")
         st.info(f"📤 Sending to Tradier: {data}")
             
         r = requests.post(f"{TRADIER_URL}/accounts/{TRADIER_ACCOUNT}/orders",
                          headers=tradier_headers(for_post=True),
                          data=data, timeout=10)
         
+        print(f"[TRADIER] Response status: {r.status_code}")
+        print(f"[TRADIER] Response body: {r.text}")
         st.info(f"📥 Tradier status: {r.status_code}")
         
         if r.status_code in [200, 201]:
-            return r.json()
+            result = r.json()
+            print(f"[TRADIER] Order SUCCESS: {result}")
+            return result
         else:
+            print(f"[TRADIER] Order FAILED: {r.status_code} - {r.text}")
             st.error(f"Tradier error {r.status_code}: {r.text}")
     except Exception as e:
+        print(f"[TRADIER] Order EXCEPTION: {e}")
         st.error(f"Order error: {e}")
     return None
 
 def buy_option_tradier(symbol, option_type, position_size):
     """Buy an option through Tradier - REAL PAPER TRADING"""
+    print(f"[BUY] Starting buy for {symbol} {option_type} (Budget: ${position_size:.2f})")
     st.info(f"🔍 Looking for {option_type.upper()} option on {symbol}... (Budget: ${position_size:.2f})")
     
     # Find appropriate option
     opt = find_option(symbol, option_type.lower(), position_size)
     if not opt:
+        print(f"[BUY] No option found for {symbol}")
         st.warning(f"❌ No {option_type} option found for {symbol}")
         return False, "No suitable option found"
     
     option_symbol = opt.get('symbol')
     ask_price = opt.get('ask', 0) or opt.get('last', 0)
     
+    print(f"[BUY] Found option: {option_symbol} @ ${ask_price}")
     st.info(f"📋 Found option: {option_symbol} @ ${ask_price}")
     
     if not ask_price or ask_price <= 0:
+        print(f"[BUY] Invalid price for {option_symbol}")
         st.warning(f"❌ Invalid price for {option_symbol}")
         return False, "Invalid option price"
     
@@ -458,17 +469,20 @@ def buy_option_tradier(symbol, option_type, position_size):
     contract_cost = ask_price * 100
     qty = max(1, int(position_size / contract_cost))
     
+    print(f"[BUY] Placing order: {qty}x {option_symbol} @ ${ask_price}")
     st.info(f"📝 Placing order: {qty}x {option_symbol} @ ${ask_price} (Cost: ${contract_cost * qty:.2f})")
     
     # Place the order
     result = place_tradier_order(option_symbol, 'buy_to_open', qty)
     
+    print(f"[BUY] Tradier result: {result}")
     st.info(f"📨 Tradier raw response: {result}")
     
     if result:
         if result.get('order'):
             order_id = result['order'].get('id')
             order_status = result['order'].get('status', 'unknown')
+            print(f"[BUY] SUCCESS - Order ID: {order_id}, Status: {order_status}")
             st.success(f"✅ ORDER PLACED: ID={order_id} Status={order_status}")
             return True, {
                 'option_symbol': option_symbol,
@@ -479,9 +493,11 @@ def buy_option_tradier(symbol, option_type, position_size):
                 'order_id': order_id
             }
         elif result.get('errors'):
+            print(f"[BUY] FAILED - Errors: {result.get('errors')}")
             st.error(f"❌ Tradier errors: {result.get('errors')}")
             return False, f"Tradier error: {result.get('errors')}"
     
+    print(f"[BUY] FAILED - No confirmation from Tradier")
     st.warning(f"❌ Order failed - Tradier did not confirm")
     return False, "Order failed"
 
