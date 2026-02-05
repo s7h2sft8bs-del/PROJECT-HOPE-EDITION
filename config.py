@@ -1,6 +1,7 @@
 """
-PROJECT HOPE - Configuration
-All settings loaded from environment variables for security
+PROJECT HOPE V2 - Configuration
+Top-tier trading bot configuration with WebSocket streaming,
+Greeks filtering, IV rank, and real-time data
 """
 
 import os
@@ -25,6 +26,18 @@ class TradierConfig:
     
     def is_sandbox(self) -> bool:
         return "sandbox" in self.base_url.lower()
+    
+    @property
+    def ws_url(self) -> str:
+        """WebSocket URL based on environment"""
+        if self.is_sandbox():
+            return "wss://sandbox-ws.tradier.com/v1/markets/events"
+        return "wss://ws.tradier.com/v1/markets/events"
+    
+    @property
+    def stream_session_url(self) -> str:
+        """URL to create streaming session"""
+        return f"{self.base_url}/v1/markets/events/session"
 
 
 @dataclass
@@ -50,7 +63,7 @@ class TradingConfig:
     """Trading rules and limits - YOUR 16 PROTECTIONS"""
     
     # Position sizing
-    max_positions: int = 5  # VIP tier max
+    max_positions: int = 5
     position_size_pct: float = 0.05  # 5% of account per trade
     
     # Stop loss / Take profit
@@ -58,21 +71,24 @@ class TradingConfig:
     take_profit_pct: float = 0.30  # +30% full exit
     
     # Partial profits
-    partial_1_trigger: float = 0.15  # +15% triggers first partial
-    partial_1_sell_pct: float = 0.50  # Sell 50% at first partial
-    partial_2_trigger: float = 0.25  # +25% triggers second partial
-    partial_2_sell_pct: float = 0.25  # Sell 25% more at second partial
+    partial_1_trigger: float = 0.15  # +15% sell 50%
+    partial_1_sell_pct: float = 0.50
+    partial_2_trigger: float = 0.25  # +25% sell 25% more
+    partial_2_sell_pct: float = 0.25
     
     # Breakeven stop
     breakeven_trigger: float = 0.10  # +10% move stop to breakeven
     
+    # Trailing stop (NEW - after partial 1)
+    trailing_stop_pct: float = 0.08  # 8% trail after first partial
+    
     # Daily limits
     daily_loss_limit_pct: float = 0.04  # 4% daily loss locks trading
-    loss_cooldown_minutes: int = 10  # Minutes to wait after any loss
+    loss_cooldown_minutes: int = 10
     
-    # Signal confirmation (15 seconds total)
-    confirmation_checks: int = 3  # Signal must hold for 3 checks
-    confirmation_interval_sec: int = 5  # 5 seconds between checks
+    # Signal confirmation
+    confirmation_checks: int = 3
+    confirmation_interval_sec: int = 5
     
     # HOT score
     min_hot_score: int = 70
@@ -80,40 +96,52 @@ class TradingConfig:
     # Option quality filters
     min_option_volume: int = 50
     min_open_interest: int = 100
-    max_spread_pct: float = 0.10  # Max 10% bid-ask spread
+    max_spread_pct: float = 0.10
+    
+    # Greeks filters (NEW)
+    target_delta: float = 0.40
+    min_delta: float = 0.25
+    max_delta: float = 0.55
+    max_theta_pct: float = 0.05  # Max theta as % of option price
+    min_iv_rank: float = 20.0  # Don't buy when IV too low
+    max_iv_rank: float = 80.0  # Don't buy when IV too high (crushed)
     
     # Stock filters
-    min_rvol: float = 1.5  # Minimum relative volume
+    min_rvol: float = 1.5
     
     # Earnings blackout
     earnings_blackout_days: int = 5
     
-    # Market data requirements
-    min_ticks_before_signals: int = 20  # Need 20 price ticks first
+    # Market data
+    min_ticks_before_signals: int = 20
     
-    # Scan intervals
-    scan_interval_sec: int = 10  # How often to scan for signals
-    price_check_interval_sec: int = 3  # How often to check positions
+    # Scan intervals (faster with WebSocket)
+    scan_interval_sec: int = 5  # Reduced from 10 - WebSocket gives faster data
+    position_check_interval_sec: int = 2  # Check positions every 2 sec
+    
+    # Opening range period
+    opening_range_minutes: int = 15  # First 15 min for ORB
 
 
-@dataclass 
+@dataclass
 class TradingWindows:
     """Trading time windows (ET) - TESTING ALL DAY"""
-    morning_start: str = "04:00"
-    morning_end: str = "20:00"
-    afternoon_start: str = "04:00"
-    afternoon_end: str = "20:00"
+    morning_start: str = "09:30"
+    morning_end: str = "16:00"
+    afternoon_start: str = "09:30"
+    afternoon_end: str = "16:00"
 
 
 @dataclass
 class SetupWeights:
-    """Weights for HOT score calculation"""
-    rvol_max_points: int = 30  # Relative volume contribution
-    key_level_points: int = 20  # Near support/resistance
-    trend_regime_points: int = 20  # TREND market bonus
-    volume_spike_points: int = 15  # 2x+ volume spike
-    good_spread_points: int = 10  # Tight bid-ask
-    bullish_news_points: int = 5  # Positive news sentiment
+    """Weights for HOT score calculation (0-100)"""
+    rvol_max_points: int = 25       # Relative volume
+    key_level_points: int = 15      # Near support/resistance
+    trend_regime_points: int = 15   # TREND market bonus
+    volume_spike_points: int = 10   # 2x+ volume spike
+    good_spread_points: int = 10    # Tight bid-ask
+    greeks_quality_points: int = 15 # Good delta/theta/IV (NEW)
+    multi_timeframe_points: int = 10 # Multi-TF alignment (NEW)
 
 
 class Config:
@@ -127,9 +155,7 @@ class Config:
         self.weights = SetupWeights()
     
     def validate(self) -> list:
-        """Validate configuration, return list of errors"""
         errors = []
-        
         if not self.tradier.api_key:
             errors.append("TRADIER_API_KEY not set")
         if not self.tradier.account_id:
@@ -142,65 +168,44 @@ class Config:
             errors.append("TWILIO_FROM_NUMBER not set (alerts disabled)")
         if not self.twilio.to_number:
             errors.append("ALERT_PHONE_NUMBER not set (alerts disabled)")
-            
         return errors
 
 
 # ==================== WATCHLIST ====================
-# High volume, options-friendly stocks
 
 WATCHLIST = [
-    # ETFs (most liquid)
+    # ETFs
     "SPY", "QQQ", "IWM",
-    
     # Big Tech
     "AAPL", "MSFT", "NVDA", "AMD", "TSLA", "META", "GOOGL", "AMZN", "NFLX",
-    
-    # Retail favorites (high volume, volatile)
+    # Retail favorites
     "SOFI", "PLTR", "NIO", "RIVN", "HOOD", "SNAP", "COIN", "MARA", "RIOT",
-    
     # Financials
     "JPM", "BAC", "C",
-    
     # Energy
     "XOM", "CVX",
-    
-    # Airlines (volatile)
+    # Airlines
     "AAL", "UAL", "DAL",
-    
     # Other high-volume
     "F", "GM", "BA", "DIS", "PYPL", "SQ", "ROKU", "UBER"
 ]
 
 
 # ==================== NEWS FILTERS ====================
-# Keywords that BLOCK trades (negative sentiment)
 
 NEGATIVE_NEWS_KEYWORDS = [
-    # Legal/Regulatory
     "lawsuit", "sued", "investigation", "fraud", "scandal", "sec probe",
     "subpoena", "indictment", "settlement", "fine", "penalty",
-    
-    # Financial distress
     "bankruptcy", "default", "restructuring", "layoff", "layoffs",
     "guidance cut", "miss estimate", "downgrade", "debt", "liquidity",
-    
-    # Management issues
     "ceo resign", "cfo resign", "executive depart", "accounting",
     "restatement", "audit", "material weakness",
-    
-    # Product/Operations
     "recall", "fda reject", "clinical fail", "supply chain",
     "production halt", "shortage",
-    
-    # Cyber/Security
     "hack", "breach", "ransomware", "data leak", "cyber attack",
-    
-    # Negative price action keywords
     "plunge", "crash", "tumble", "sink", "collapse"
 ]
 
-# Keywords that are POSITIVE (add to HOT score)
 POSITIVE_NEWS_KEYWORDS = [
     "upgrade", "beat estimate", "raise guidance", "partnership",
     "contract win", "fda approve", "acquisition", "buyback",
@@ -211,20 +216,17 @@ POSITIVE_NEWS_KEYWORDS = [
 # ==================== SETUP TYPES ====================
 
 class SetupType:
-    """Setup identification constants"""
-    OPENING_RANGE_BREAK = "ORB"  # Opening Range Breakout
-    VWAP_BOUNCE = "VWAP"  # VWAP Bounce/Reject
-    PULLBACK_CONTINUATION = "PULLBACK"  # EMA Pullback
-    BREAK_AND_RETEST = "RETEST"  # Break & Retest
-    
+    OPENING_RANGE_BREAK = "ORB"
+    VWAP_BOUNCE = "VWAP"
+    PULLBACK_CONTINUATION = "PULLBACK"
+    BREAK_AND_RETEST = "RETEST"
     ALL = [OPENING_RANGE_BREAK, VWAP_BOUNCE, PULLBACK_CONTINUATION, BREAK_AND_RETEST]
 
 
 # ==================== MARKET REGIMES ====================
 
 class MarketRegime:
-    """Market regime constants"""
-    TREND = "TREND"  # Good to trade
-    MIXED = "MIXED"  # No trading
-    CHOP = "CHOP"    # No trading
-    UNKNOWN = "UNKNOWN"  # Waiting for data
+    TREND = "TREND"
+    MIXED = "MIXED"
+    CHOP = "CHOP"
+    UNKNOWN = "UNKNOWN"

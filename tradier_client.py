@@ -1,6 +1,6 @@
 """
-PROJECT HOPE - Tradier Client
-Handles all interactions with Tradier API for quotes, orders, and account data
+PROJECT HOPE V2 - Tradier Client
+Enhanced with Greeks analysis, IV rank calculation, and smarter option selection
 """
 
 import logging
@@ -9,13 +9,13 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 import requests
 
-from config import TradierConfig
+from config import TradierConfig, TradingConfig
 
 logger = logging.getLogger(__name__)
 
 
 class TradierClient:
-    """Tradier API wrapper for trading operations"""
+    """Tradier API wrapper with enhanced Greeks and IV analysis"""
     
     def __init__(self, config: TradierConfig):
         self.config = config
@@ -29,17 +29,18 @@ class TradierClient:
         
         # Rate limiting
         self.last_request_time = 0
-        self.min_request_interval = 0.1  # 100ms between requests
+        self.min_request_interval = 0.1
+        
+        # IV history cache for IV rank calculation
+        self._iv_cache: Dict[str, List[float]] = {}
     
     def _rate_limit(self):
-        """Enforce rate limiting"""
         elapsed = time.time() - self.last_request_time
         if elapsed < self.min_request_interval:
             time.sleep(self.min_request_interval - elapsed)
         self.last_request_time = time.time()
     
     def _get(self, endpoint: str, params: dict = None) -> Optional[dict]:
-        """Make GET request to Tradier API"""
         self._rate_limit()
         url = f"{self.base_url}{endpoint}"
         try:
@@ -51,7 +52,6 @@ class TradierClient:
             return None
     
     def _post(self, endpoint: str, data: dict = None) -> Optional[dict]:
-        """Make POST request to Tradier API"""
         self._rate_limit()
         url = f"{self.base_url}{endpoint}"
         try:
@@ -63,7 +63,6 @@ class TradierClient:
             return None
     
     def _delete(self, endpoint: str) -> Optional[dict]:
-        """Make DELETE request to Tradier API"""
         self._rate_limit()
         url = f"{self.base_url}{endpoint}"
         try:
@@ -77,7 +76,6 @@ class TradierClient:
     # ==================== ACCOUNT ====================
     
     def get_account_balance(self) -> Optional[Dict]:
-        """Get account balance and buying power"""
         result = self._get(f"/v1/accounts/{self.config.account_id}/balances")
         if result and "balances" in result:
             bal = result["balances"]
@@ -91,7 +89,6 @@ class TradierClient:
         return None
     
     def get_positions(self) -> List[Dict]:
-        """Get all open positions"""
         result = self._get(f"/v1/accounts/{self.config.account_id}/positions")
         if result and "positions" in result:
             positions = result["positions"]
@@ -105,7 +102,6 @@ class TradierClient:
         return []
     
     def get_orders(self, status: str = "open") -> List[Dict]:
-        """Get orders by status (open, pending, filled, etc.)"""
         result = self._get(f"/v1/accounts/{self.config.account_id}/orders")
         if result and "orders" in result:
             orders = result["orders"]
@@ -115,14 +111,12 @@ class TradierClient:
                 order_list = orders["order"]
                 if isinstance(order_list, dict):
                     order_list = [order_list]
-                # Filter by status
                 return [o for o in order_list if o.get("status") == status]
         return []
 
     # ==================== MARKET DATA ====================
     
     def get_quote(self, symbol: str) -> Optional[Dict]:
-        """Get current quote for a symbol"""
         result = self._get("/v1/markets/quotes", {"symbols": symbol})
         if result and "quotes" in result:
             quote = result["quotes"].get("quote")
@@ -137,7 +131,7 @@ class TradierClient:
                     "high": quote.get("high"),
                     "low": quote.get("low"),
                     "open": quote.get("open"),
-                    "close": quote.get("close"),  # Previous close
+                    "close": quote.get("close"),
                     "volume": quote.get("volume"),
                     "average_volume": quote.get("average_volume"),
                     "change": quote.get("change"),
@@ -146,18 +140,14 @@ class TradierClient:
         return None
     
     def get_quotes(self, symbols: List[str]) -> Dict[str, Dict]:
-        """Get quotes for multiple symbols"""
         if not symbols:
             return {}
-        
         result = self._get("/v1/markets/quotes", {"symbols": ",".join(symbols)})
         quotes = {}
-        
         if result and "quotes" in result:
             quote_data = result["quotes"].get("quote", [])
             if isinstance(quote_data, dict):
                 quote_data = [quote_data]
-            
             for q in quote_data:
                 sym = q.get("symbol")
                 if sym:
@@ -177,9 +167,10 @@ class TradierClient:
                     }
         return quotes
     
-    def get_option_chain(self, symbol: str, expiration: str = None) -> List[Dict]:
-        """Get option chain for a symbol"""
-        params = {"symbol": symbol, "greeks": "true"}
+    def get_option_chain(self, symbol: str, expiration: str = None, 
+                         greeks: bool = True) -> List[Dict]:
+        """Get option chain with full Greeks data"""
+        params = {"symbol": symbol, "greeks": str(greeks).lower()}
         if expiration:
             params["expiration"] = expiration
         
@@ -192,98 +183,375 @@ class TradierClient:
                 chain = [chain]
             
             for opt in chain:
+                greeks_data = opt.get("greeks", {}) or {}
                 options.append({
                     "symbol": opt.get("symbol"),
                     "underlying": opt.get("underlying"),
                     "strike": opt.get("strike"),
                     "expiration": opt.get("expiration_date"),
-                    "option_type": opt.get("option_type"),  # call or put
+                    "option_type": opt.get("option_type"),
                     "last": opt.get("last"),
                     "bid": opt.get("bid"),
                     "ask": opt.get("ask"),
                     "volume": opt.get("volume"),
                     "open_interest": opt.get("open_interest"),
-                    "delta": opt.get("greeks", {}).get("delta"),
-                    "gamma": opt.get("greeks", {}).get("gamma"),
-                    "theta": opt.get("greeks", {}).get("theta"),
-                    "vega": opt.get("greeks", {}).get("vega"),
-                    "iv": opt.get("greeks", {}).get("mid_iv"),
+                    # Full Greeks
+                    "delta": greeks_data.get("delta", 0),
+                    "gamma": greeks_data.get("gamma", 0),
+                    "theta": greeks_data.get("theta", 0),
+                    "vega": greeks_data.get("vega", 0),
+                    "rho": greeks_data.get("rho", 0),
+                    "iv": greeks_data.get("mid_iv", 0),  # Implied volatility
+                    "phi": greeks_data.get("phi", 0),
                 })
         return options
     
     def get_option_expirations(self, symbol: str) -> List[str]:
-        """Get available option expiration dates"""
         result = self._get("/v1/markets/options/expirations", {"symbol": symbol})
         if result and "expirations" in result:
-            exp = result["expirations"].get("date", [])
-            if isinstance(exp, str):
-                return [exp]
-            return exp
+            exp = result["expirations"]
+            if exp and "date" in exp:
+                dates = exp["date"]
+                if isinstance(dates, str):
+                    return [dates]
+                return dates
         return []
     
-    def get_timesales(self, symbol: str, interval: str = "1min", 
-                      start: str = None, end: str = None) -> List[Dict]:
-        """Get intraday time and sales data"""
+    def get_historical(self, symbol: str, interval: str = "daily",
+                       start: str = None, end: str = None) -> List[Dict]:
+        """Get historical price data"""
         params = {"symbol": symbol, "interval": interval}
         if start:
             params["start"] = start
         if end:
             params["end"] = end
         
-        result = self._get("/v1/markets/timesales", params)
+        result = self._get("/v1/markets/history", params)
         bars = []
         
-        if result and "series" in result:
-            data = result["series"].get("data", [])
-            if isinstance(data, dict):
-                data = [data]
-            
-            for bar in data:
+        if result and "history" in result and result["history"]:
+            day_data = result["history"].get("day", [])
+            if isinstance(day_data, dict):
+                day_data = [day_data]
+            for d in day_data:
                 bars.append({
-                    "time": bar.get("time"),
-                    "timestamp": bar.get("timestamp"),
-                    "open": bar.get("open"),
-                    "high": bar.get("high"),
-                    "low": bar.get("low"),
-                    "close": bar.get("close"),
-                    "volume": bar.get("volume"),
-                    "vwap": bar.get("vwap"),
+                    "date": d.get("date"),
+                    "open": d.get("open"),
+                    "high": d.get("high"),
+                    "low": d.get("low"),
+                    "close": d.get("close"),
+                    "volume": d.get("volume"),
                 })
         return bars
     
     def get_clock(self) -> Optional[Dict]:
-        """Get market clock/status"""
         result = self._get("/v1/markets/clock")
         if result and "clock" in result:
-            clock = result["clock"]
-            return {
-                "state": clock.get("state"),  # open, closed, premarket, postmarket
-                "timestamp": clock.get("timestamp"),
-                "next_state": clock.get("next_state"),
-                "next_change": clock.get("next_change"),
-            }
+            return result["clock"]
         return None
 
-    # ==================== ORDERS ====================
+    # ==================== GREEKS & IV ANALYSIS ====================
+    
+    def calculate_iv_rank(self, symbol: str) -> float:
+        """
+        Calculate IV Rank (0-100)
+        Compares current IV to 52-week IV range
+        Low IV Rank = options are cheap
+        High IV Rank = options are expensive
+        """
+        try:
+            # Get current ATM option IV
+            current_iv = self._get_current_iv(symbol)
+            if current_iv <= 0:
+                return 50.0  # Default to middle
+            
+            # Get historical data to estimate IV range
+            end_date = datetime.now().strftime("%Y-%m-%d")
+            start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+            
+            history = self.get_historical(symbol, start=start_date, end=end_date)
+            if len(history) < 30:
+                return 50.0
+            
+            # Estimate historical volatility from price data
+            closes = [bar["close"] for bar in history if bar.get("close")]
+            if len(closes) < 30:
+                return 50.0
+            
+            # Calculate rolling 30-day HV
+            import math
+            hvs = []
+            for i in range(30, len(closes)):
+                window = closes[i-30:i]
+                returns = [math.log(window[j]/window[j-1]) for j in range(1, len(window))]
+                if returns:
+                    hv = (sum(r**2 for r in returns) / len(returns)) ** 0.5 * (252 ** 0.5)
+                    hvs.append(hv)
+            
+            if not hvs:
+                return 50.0
+            
+            # IV Rank = (Current IV - 52wk Low) / (52wk High - 52wk Low) * 100
+            iv_low = min(hvs)
+            iv_high = max(hvs)
+            
+            if iv_high == iv_low:
+                return 50.0
+            
+            iv_rank = ((current_iv - iv_low) / (iv_high - iv_low)) * 100
+            return max(0, min(100, iv_rank))
+            
+        except Exception as e:
+            logger.error(f"IV rank calc error for {symbol}: {e}")
+            return 50.0
+    
+    def _get_current_iv(self, symbol: str) -> float:
+        """Get current ATM implied volatility"""
+        try:
+            # Get stock price
+            quote = self.get_quote(symbol)
+            if not quote:
+                return 0
+            price = quote.get("last", 0)
+            if price <= 0:
+                return 0
+            
+            # Get nearest expiration
+            expirations = self.get_option_expirations(symbol)
+            if not expirations:
+                return 0
+            
+            # Find expiration 7-14 days out
+            today = datetime.now().date()
+            target_exp = None
+            for exp in expirations:
+                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+                days = (exp_date - today).days
+                if 5 <= days <= 21:
+                    target_exp = exp
+                    break
+            
+            if not target_exp:
+                target_exp = expirations[0] if expirations else None
+            
+            if not target_exp:
+                return 0
+            
+            # Get ATM options
+            chain = self.get_option_chain(symbol, target_exp)
+            
+            # Find option closest to ATM
+            best_iv = 0
+            best_distance = float('inf')
+            
+            for opt in chain:
+                strike = opt.get("strike", 0)
+                iv = opt.get("iv", 0) or 0
+                if iv > 0:
+                    distance = abs(strike - price)
+                    if distance < best_distance:
+                        best_distance = distance
+                        best_iv = iv
+            
+            return best_iv
+            
+        except Exception as e:
+            logger.error(f"Current IV error for {symbol}: {e}")
+            return 0
+    
+    def analyze_option_greeks(self, option: dict, stock_price: float) -> dict:
+        """
+        Analyze option Greeks and return quality assessment
+        Returns dict with scores and warnings
+        """
+        analysis = {
+            "score": 0,
+            "warnings": [],
+            "delta_ok": False,
+            "theta_ok": False,
+            "iv_ok": False,
+            "spread_ok": False,
+        }
+        
+        delta = abs(option.get("delta", 0))
+        theta = option.get("theta", 0)
+        iv = option.get("iv", 0) or 0
+        bid = option.get("bid", 0)
+        ask = option.get("ask", 0)
+        option_price = (bid + ask) / 2 if bid and ask else option.get("last", 0)
+        
+        # Delta check (0.25 - 0.55 ideal)
+        if 0.25 <= delta <= 0.55:
+            analysis["delta_ok"] = True
+            analysis["score"] += 25
+            if 0.35 <= delta <= 0.45:
+                analysis["score"] += 10  # Sweet spot bonus
+        else:
+            analysis["warnings"].append(f"Delta {delta:.2f} outside 0.25-0.55")
+        
+        # Theta check (not bleeding too fast)
+        if option_price > 0 and theta != 0:
+            theta_pct = abs(theta) / option_price
+            if theta_pct < 0.05:  # Less than 5% daily decay
+                analysis["theta_ok"] = True
+                analysis["score"] += 20
+            else:
+                analysis["warnings"].append(f"Theta decay {theta_pct*100:.1f}%/day too high")
+        else:
+            analysis["theta_ok"] = True
+            analysis["score"] += 15
+        
+        # IV check
+        if iv > 0:
+            if 0.15 <= iv <= 0.80:
+                analysis["iv_ok"] = True
+                analysis["score"] += 20
+            elif iv > 0.80:
+                analysis["warnings"].append(f"IV {iv*100:.0f}% very high - expensive")
+            else:
+                analysis["warnings"].append(f"IV {iv*100:.0f}% very low")
+        else:
+            analysis["iv_ok"] = True
+            analysis["score"] += 10
+        
+        # Spread check
+        if bid > 0 and ask > 0:
+            spread_pct = (ask - bid) / ask
+            if spread_pct < 0.05:
+                analysis["spread_ok"] = True
+                analysis["score"] += 25
+            elif spread_pct < 0.10:
+                analysis["spread_ok"] = True
+                analysis["score"] += 15
+            else:
+                analysis["warnings"].append(f"Spread {spread_pct*100:.1f}% too wide")
+        
+        return analysis
+
+    # ==================== ENHANCED OPTION SELECTION ====================
+    
+    def find_best_option(self, symbol: str, option_type: str,
+                         trading_config: TradingConfig,
+                         days_to_expiry: Tuple[int, int] = (3, 14)) -> Optional[Dict]:
+        """
+        Find best option with full Greeks analysis
+        Returns option dict with Greeks quality score
+        """
+        # Get stock price
+        quote = self.get_quote(symbol)
+        if not quote:
+            return None
+        stock_price = quote.get("last", 0)
+        if stock_price <= 0:
+            return None
+        
+        # Get expirations
+        expirations = self.get_option_expirations(symbol)
+        if not expirations:
+            logger.warning(f"No expirations found for {symbol}")
+            return None
+        
+        # Filter valid expirations
+        today = datetime.now().date()
+        valid_expirations = []
+        for exp in expirations:
+            exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+            days = (exp_date - today).days
+            if days_to_expiry[0] <= days <= days_to_expiry[1]:
+                valid_expirations.append((exp, days))
+        
+        if not valid_expirations:
+            # Fallback to nearest
+            for exp in expirations[:2]:
+                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+                days = (exp_date - today).days
+                if days >= 1:
+                    valid_expirations.append((exp, days))
+        
+        if not valid_expirations:
+            return None
+        
+        best_option = None
+        best_total_score = -1
+        
+        for exp, days in valid_expirations[:3]:
+            chain = self.get_option_chain(symbol, exp)
+            
+            for opt in chain:
+                if opt["option_type"] != option_type:
+                    continue
+                
+                # Basic filters
+                vol = opt.get("volume") or 0
+                oi = opt.get("open_interest") or 0
+                bid = opt.get("bid") or 0
+                ask = opt.get("ask") or 0
+                
+                if vol < trading_config.min_option_volume:
+                    continue
+                if oi < trading_config.min_open_interest:
+                    continue
+                if bid <= 0 or ask <= 0:
+                    continue
+                
+                spread_pct = (ask - bid) / ask
+                if spread_pct > trading_config.max_spread_pct:
+                    continue
+                
+                # Delta filter
+                delta = abs(opt.get("delta", 0))
+                if delta < trading_config.min_delta or delta > trading_config.max_delta:
+                    continue
+                
+                # Greeks analysis
+                greeks_analysis = self.analyze_option_greeks(opt, stock_price)
+                
+                # Calculate total score
+                delta_score = max(0, 1 - abs(delta - trading_config.target_delta) * 3) * 30
+                volume_score = min(20, (vol / 500) * 20)
+                oi_score = min(15, (oi / 1000) * 15)
+                spread_score = (1 - spread_pct) * 20
+                greeks_score = greeks_analysis["score"] * 0.15  # Scale to ~15 pts
+                
+                total_score = delta_score + volume_score + oi_score + spread_score + greeks_score
+                
+                if total_score > best_total_score:
+                    best_total_score = total_score
+                    opt["greeks_analysis"] = greeks_analysis
+                    opt["selection_score"] = total_score
+                    opt["days_to_expiry"] = days
+                    best_option = opt
+        
+        if best_option:
+            logger.info(
+                f"🎯 Best option for {symbol}: "
+                f"Strike ${best_option['strike']} "
+                f"Exp {best_option['expiration']} "
+                f"Δ={abs(best_option.get('delta',0)):.2f} "
+                f"θ={best_option.get('theta',0):.3f} "
+                f"IV={best_option.get('iv',0)*100:.0f}% "
+                f"Score={best_total_score:.0f}"
+            )
+        
+        return best_option
+
+    # ==================== ORDER EXECUTION ====================
     
     def place_option_order(self, option_symbol: str, side: str, quantity: int,
                            order_type: str = "market", limit_price: float = None,
                            stop_price: float = None, duration: str = "day") -> Optional[Dict]:
-        """
-        Place an option order
+        # Extract underlying from option symbol
+        underlying = ""
+        for i, c in enumerate(option_symbol):
+            if c.isdigit():
+                underlying = option_symbol[:i]
+                break
+        if not underlying:
+            underlying = option_symbol[:4].rstrip("0123456789")
         
-        Args:
-            option_symbol: Full OCC option symbol (e.g., AAPL240119C00150000)
-            side: "buy_to_open", "buy_to_close", "sell_to_open", "sell_to_close"
-            quantity: Number of contracts
-            order_type: "market", "limit", "stop", "stop_limit"
-            limit_price: Limit price (required for limit orders)
-            stop_price: Stop price (required for stop orders)
-            duration: "day", "gtc", "pre", "post"
-        """
         data = {
             "class": "option",
-            "symbol": option_symbol[:option_symbol.index("2") if "2" in option_symbol else len(option_symbol)].rstrip("0123456789"),  # Extract underlying
+            "symbol": underlying,
             "option_symbol": option_symbol,
             "side": side,
             "quantity": quantity,
@@ -301,45 +569,22 @@ class TradierClient:
         if result and "order" in result:
             order = result["order"]
             logger.info(f"✅ Order placed: {side} {quantity}x {option_symbol} - ID: {order.get('id')}")
-            return {
-                "id": order.get("id"),
-                "status": order.get("status"),
-            }
+            return {"id": order.get("id"), "status": order.get("status")}
         else:
             logger.error(f"❌ Order failed: {result}")
             return None
     
     def place_market_buy(self, option_symbol: str, quantity: int) -> Optional[Dict]:
-        """Quick helper for market buy to open"""
-        return self.place_option_order(
-            option_symbol=option_symbol,
-            side="buy_to_open",
-            quantity=quantity,
-            order_type="market"
-        )
+        return self.place_option_order(option_symbol, "buy_to_open", quantity, "market")
     
     def place_market_sell(self, option_symbol: str, quantity: int) -> Optional[Dict]:
-        """Quick helper for market sell to close"""
-        return self.place_option_order(
-            option_symbol=option_symbol,
-            side="sell_to_close",
-            quantity=quantity,
-            order_type="market"
-        )
+        return self.place_option_order(option_symbol, "sell_to_close", quantity, "market")
     
-    def place_limit_sell(self, option_symbol: str, quantity: int, 
+    def place_limit_sell(self, option_symbol: str, quantity: int,
                          limit_price: float) -> Optional[Dict]:
-        """Place limit sell order (for take profit)"""
-        return self.place_option_order(
-            option_symbol=option_symbol,
-            side="sell_to_close",
-            quantity=quantity,
-            order_type="limit",
-            limit_price=limit_price
-        )
+        return self.place_option_order(option_symbol, "sell_to_close", quantity, "limit", limit_price)
     
     def cancel_order(self, order_id: str) -> bool:
-        """Cancel an open order"""
         result = self._delete(f"/v1/accounts/{self.config.account_id}/orders/{order_id}")
         if result and result.get("order", {}).get("status") == "ok":
             logger.info(f"✅ Order {order_id} cancelled")
@@ -347,128 +592,13 @@ class TradierClient:
         logger.error(f"❌ Failed to cancel order {order_id}")
         return False
     
-    def modify_order(self, order_id: str, order_type: str = None,
-                     limit_price: float = None, stop_price: float = None) -> bool:
-        """Modify an existing order"""
-        data = {}
-        if order_type:
-            data["type"] = order_type
-        if limit_price:
-            data["price"] = round(limit_price, 2)
-        if stop_price:
-            data["stop"] = round(stop_price, 2)
-        
-        result = self._post(
-            f"/v1/accounts/{self.config.account_id}/orders/{order_id}",
-            data
-        )
-        
-        if result and "order" in result:
-            logger.info(f"✅ Order {order_id} modified")
-            return True
-        return False
-
-    # ==================== HELPERS ====================
-    
-    def find_best_option(self, symbol: str, option_type: str, 
-                         target_delta: float = 0.40,
-                         min_volume: int = 50,
-                         min_oi: int = 100,
-                         max_spread_pct: float = 0.10,
-                         days_to_expiry: Tuple[int, int] = (3, 14)) -> Optional[Dict]:
-        """
-        Find the best option contract matching criteria
-        
-        Args:
-            symbol: Underlying symbol
-            option_type: "call" or "put"
-            target_delta: Target delta (0.30-0.50 recommended)
-            min_volume: Minimum option volume
-            min_oi: Minimum open interest
-            max_spread_pct: Maximum bid-ask spread as percentage
-            days_to_expiry: (min_days, max_days) tuple
-        """
-        # Get expirations
-        expirations = self.get_option_expirations(symbol)
-        if not expirations:
-            logger.warning(f"No expirations found for {symbol}")
-            return None
-        
-        # Filter to valid expiration range
-        today = datetime.now().date()
-        valid_expirations = []
-        for exp in expirations:
-            exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
-            days = (exp_date - today).days
-            if days_to_expiry[0] <= days <= days_to_expiry[1]:
-                valid_expirations.append(exp)
-        
-        if not valid_expirations:
-            # Fall back to nearest expiration
-            valid_expirations = [expirations[0]]
-        
-        # Search through expirations for best option
-        best_option = None
-        best_score = -1
-        
-        for exp in valid_expirations[:2]:  # Check first 2 valid expirations
-            chain = self.get_option_chain(symbol, exp)
-            
-            for opt in chain:
-                # Filter by type
-                if opt["option_type"] != option_type:
-                    continue
-                
-                # Check volume
-                vol = opt.get("volume") or 0
-                if vol < min_volume:
-                    continue
-                
-                # Check open interest
-                oi = opt.get("open_interest") or 0
-                if oi < min_oi:
-                    continue
-                
-                # Check spread
-                bid = opt.get("bid") or 0
-                ask = opt.get("ask") or 0
-                if bid <= 0 or ask <= 0:
-                    continue
-                
-                spread_pct = (ask - bid) / ask
-                if spread_pct > max_spread_pct:
-                    continue
-                
-                # Check delta (if available)
-                delta = abs(opt.get("delta") or 0)
-                
-                # Score this option
-                # Prefer: delta close to target, high volume, tight spread
-                delta_score = max(0, 1 - abs(delta - target_delta) * 2)
-                volume_score = min(1, vol / 1000)
-                spread_score = 1 - spread_pct
-                
-                score = delta_score * 0.4 + volume_score * 0.3 + spread_score * 0.3
-                
-                if score > best_score:
-                    best_score = score
-                    best_option = opt
-        
-        return best_option
-    
-    def get_option_quote(self, option_symbol: str) -> Optional[Dict]:
-        """Get quote for a specific option symbol"""
-        return self.get_quote(option_symbol)
-    
     def is_market_open(self) -> bool:
-        """Check if market is currently open"""
         clock = self.get_clock()
         if clock:
             return clock.get("state") == "open"
         return False
     
     def test_connection(self) -> bool:
-        """Test API connection"""
         try:
             balance = self.get_account_balance()
             if balance:
