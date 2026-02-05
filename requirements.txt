@@ -1,0 +1,17 @@
+# PROJECT HOPE - Dependencies
+# Install with: pip install -r requirements.txt
+
+# HTTP requests for Tradier API
+requests>=2.31.0
+
+# Timezone handling
+pytz>=2024.1
+
+# SMS alerts via Twilio
+twilio>=8.10.0
+
+# Optional: for more robust scheduling
+# schedule>=1.2.0
+
+# Optional: for better async support
+# aiohttp>=3.9.0

@@ -1,0 +1,42 @@
+# render.yaml - Render Blueprint for PROJECT HOPE
+# This configures the Background Worker on Render
+
+services:
+  - type: worker
+    name: project-hope-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    
+    # Auto-deploy on push to main branch
+    autoDeploy: true
+    
+    # Environment variables (set these in Render dashboard)
+    envVars:
+      - key: TRADIER_API_KEY
+        sync: false  # Set manually in dashboard
+      - key: TRADIER_ACCOUNT_ID
+        sync: false
+      - key: TRADIER_BASE_URL
+        value: https://sandbox.tradier.com  # Change to https://api.tradier.com for live
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false
+      - key: ALERT_PHONE_NUMBER
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.11"
+    
+    # Health check (Render will restart if unhealthy)
+    # Note: Workers don't have HTTP health checks, 
+    # but Render monitors the process
+    
+    # Instance type - start small
+    plan: starter  # $7/month, good for testing
+    # Upgrade to "standard" ($25/month) for production
+    
+    # Region - East coast for lower latency to markets
+    region: ohio  # or virginia
