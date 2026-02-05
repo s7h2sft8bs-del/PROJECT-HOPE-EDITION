@@ -1,6 +1,6 @@
 services:
   - type: worker
-    name: project-hope-v2
+    name: project-hope-v1
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py

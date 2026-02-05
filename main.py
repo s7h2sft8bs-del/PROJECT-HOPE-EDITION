@@ -1,116 +1,67 @@
-#!/usr/bin/env python3
 """
-PROJECT HOPE V2 - Headless Options Trading Bot
-Top-tier trading bot with:
-  - WebSocket real-time streaming
-  - Greeks analysis (delta, theta, IV rank)
-  - Multi-timeframe confirmation (1min + 5min)
-  - Proper VWAP with standard deviation bands
-  - Real candle-based indicators
-  - 16 protection rules
-  - SMS alerts via Twilio
-
-Deploy to Render as Background Worker
+PROJECT HOPE V1 - Headless Trading Bot
+Entry point - runs on Render as background worker
+REST polling only, no WebSocket needed
 """
 
 import logging
 import sys
-import os
+import time
 from datetime import datetime
 
+import pytz
 
-def setup_logging():
-    log_format = "%(asctime)s | %(levelname)-8s | %(message)s"
-    date_format = "%Y-%m-%d %H:%M:%S"
-    
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(logging.Formatter(log_format, date_format))
-    
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-    root_logger.addHandler(console_handler)
-    
-    # Reduce noise
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("requests").setLevel(logging.WARNING)
-    logging.getLogger("websockets").setLevel(logging.WARNING)
-    
-    return logging.getLogger(__name__)
+from config import Config
+from trading_engine import TradingEngine
 
+ET = pytz.timezone('US/Eastern')
 
-def check_environment():
-    required = ["TRADIER_API_KEY", "TRADIER_ACCOUNT_ID"]
-    optional = [
-        "TRADIER_BASE_URL",
-        "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN",
-        "TWILIO_FROM_NUMBER", "ALERT_PHONE_NUMBER",
-    ]
-    
-    missing = [var for var in required if not os.environ.get(var)]
-    
-    if missing:
-        print(f"❌ Missing required: {missing}")
-        return False
-    return True
+# ==================== LOGGING ====================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
 
 
 def main():
-    logger = setup_logging()
-    
     logger.info("=" * 60)
-    logger.info("🚀 PROJECT HOPE V2 - Top-Tier Options Trading Bot")
+    logger.info("🌱 PROJECT HOPE - Headless Trading Bot V1")
     logger.info("=" * 60)
-    logger.info(f"📅 Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"⏰ Started at {datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S ET')}")
+    logger.info("📡 Mode: REST Polling (no WebSocket)")
     logger.info("")
-    logger.info("⚡ UPGRADES FROM V1:")
-    logger.info("  📡 WebSocket real-time streaming (tick-by-tick)")
-    logger.info("  📊 Greeks analysis (delta, theta, gamma, IV)")
-    logger.info("  📈 IV Rank filtering (avoid expensive options)")
-    logger.info("  🔄 Multi-timeframe confirmation (1min + 5min)")
-    logger.info("  📉 Proper VWAP with standard deviation bands")
-    logger.info("  🕯️ Real candle-based indicators (not snapshots)")
-    logger.info("  🛡️ All 16 protection rules active")
-    logger.info("")
-    
-    if not check_environment():
-        sys.exit(1)
-    
-    from config import Config
-    from trading_engine import TradingEngine
-    
-    config = Config()
-    
-    logger.info(f"🔧 Tradier URL: {config.tradier.base_url}")
-    logger.info(f"🔧 WebSocket URL: {config.tradier.ws_url}")
-    logger.info(f"🔧 Max positions: {config.trading.max_positions}")
-    logger.info(f"🔧 Stop loss: {config.trading.stop_loss_pct*100:.0f}%")
-    logger.info(f"🔧 Take profit: {config.trading.take_profit_pct*100:.0f}%")
-    logger.info(f"🔧 Daily loss limit: {config.trading.daily_loss_limit_pct*100:.0f}%")
-    logger.info(f"🔧 Min HOT score: {config.trading.min_hot_score}")
-    logger.info(f"🔧 Delta range: {config.trading.min_delta}-{config.trading.max_delta}")
-    logger.info(f"🔧 IV rank range: {config.trading.min_iv_rank}-{config.trading.max_iv_rank}")
-    logger.info(f"🔧 SMS alerts: {'Enabled' if config.twilio.account_sid else 'Disabled'}")
-    
+
+    # Load config from environment
+    config = Config.from_env()
+
+    # Validate
+    errors = config.validate()
+    for err in errors:
+        logger.warning(f"⚠️ {err}")
+
+    if not config.tradier.api_key:
+        logger.error("❌ TRADIER_API_KEY is required. Set it in Render environment variables.")
+        logger.error("Waiting 60s before retry...")
+        time.sleep(60)
+        return main()
+
+    # Create and initialize engine
     engine = TradingEngine(config)
-    
+
     if not engine.initialize():
-        logger.error("❌ Failed to initialize V2 engine")
-        sys.exit(1)
-    
+        logger.error("❌ Failed to initialize. Retrying in 60s...")
+        time.sleep(60)
+        return main()
+
+    # Run the trading loop
+    logger.info("")
+    logger.info("✅ All systems go. Trading loop starting...")
     logger.info("=" * 60)
-    logger.info("🏁 Starting V2 trading loop...")
-    logger.info("=" * 60)
-    
-    try:
-        engine.run()
-    except KeyboardInterrupt:
-        logger.info("⏹️ Shutdown requested")
-    except Exception as e:
-        logger.exception(f"❌ Fatal error: {e}")
-        sys.exit(1)
-    
-    logger.info("👋 Goodbye!")
+    engine.run()
 
 
 if __name__ == "__main__":

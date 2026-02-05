@@ -1,7 +1,7 @@
 """
-PROJECT HOPE V2 - Configuration
-Top-tier trading bot configuration with WebSocket streaming,
-Greeks filtering, IV rank, and real-time data
+PROJECT HOPE V1 - Configuration
+All 16 trading protections, watchlist, and settings
+REST polling only - no WebSocket needed
 """
 
 import os
@@ -9,13 +9,15 @@ from dataclasses import dataclass, field
 from typing import List
 
 
+# ==================== API CONFIGS ====================
+
 @dataclass
 class TradierConfig:
     """Tradier API configuration"""
     api_key: str
     account_id: str
     base_url: str
-    
+
     @classmethod
     def from_env(cls) -> "TradierConfig":
         return cls(
@@ -23,21 +25,9 @@ class TradierConfig:
             account_id=os.environ.get("TRADIER_ACCOUNT_ID", ""),
             base_url=os.environ.get("TRADIER_BASE_URL", "https://sandbox.tradier.com")
         )
-    
+
     def is_sandbox(self) -> bool:
         return "sandbox" in self.base_url.lower()
-    
-    @property
-    def ws_url(self) -> str:
-        """WebSocket URL based on environment"""
-        if self.is_sandbox():
-            return "wss://sandbox-ws.tradier.com/v1/markets/events"
-        return "wss://ws.tradier.com/v1/markets/events"
-    
-    @property
-    def stream_session_url(self) -> str:
-        """URL to create streaming session"""
-        return f"{self.base_url}/v1/markets/events/session"
 
 
 @dataclass
@@ -47,7 +37,7 @@ class TwilioConfig:
     auth_token: str
     from_number: str
     to_number: str
-    
+
     @classmethod
     def from_env(cls) -> "TwilioConfig":
         return cls(
@@ -58,69 +48,27 @@ class TwilioConfig:
         )
 
 
+# ==================== TRADING RULES ====================
+
 @dataclass
-class TradingConfig:
-    """Trading rules and limits - YOUR 16 PROTECTIONS"""
-    
-    # Position sizing
-    max_positions: int = 5
-    position_size_pct: float = 0.05  # 5% of account per trade
-    
+class RiskConfig:
+    """YOUR 16 PROTECTIONS"""
     # Stop loss / Take profit
-    stop_loss_pct: float = -0.25  # -25% hard stop
-    take_profit_pct: float = 0.30  # +30% full exit
-    
-    # Partial profits
-    partial_1_trigger: float = 0.15  # +15% sell 50%
-    partial_1_sell_pct: float = 0.50
-    partial_2_trigger: float = 0.25  # +25% sell 25% more
-    partial_2_sell_pct: float = 0.25
-    
-    # Breakeven stop
-    breakeven_trigger: float = 0.10  # +10% move stop to breakeven
-    
-    # Trailing stop (NEW - after partial 1)
-    trailing_stop_pct: float = 0.08  # 8% trail after first partial
-    
+    stop_loss_pct: float = -0.25          # -25% stop loss
+    take_profit_pct: float = 0.30         # +30% take profit
+    partial_t1_pct: float = 0.15          # +15% sell 50%
+    partial_t1_sell: float = 0.50         # sell 50% at T1
+    partial_t2_pct: float = 0.25          # +25% sell 25% more
+    partial_t2_sell: float = 0.25         # sell 25% at T2
+    breakeven_trigger_pct: float = 0.10   # +10% move stop to entry
+
     # Daily limits
-    daily_loss_limit_pct: float = 0.04  # 4% daily loss locks trading
-    loss_cooldown_minutes: int = 10
-    
-    # Signal confirmation
-    confirmation_checks: int = 3
-    confirmation_interval_sec: int = 5
-    
-    # HOT score
-    min_hot_score: int = 70
-    
-    # Option quality filters
-    min_option_volume: int = 50
-    min_open_interest: int = 100
-    max_spread_pct: float = 0.10
-    
-    # Greeks filters (NEW)
-    target_delta: float = 0.40
-    min_delta: float = 0.25
-    max_delta: float = 0.55
-    max_theta_pct: float = 0.05  # Max theta as % of option price
-    min_iv_rank: float = 20.0  # Don't buy when IV too low
-    max_iv_rank: float = 80.0  # Don't buy when IV too high (crushed)
-    
-    # Stock filters
-    min_rvol: float = 1.5
-    
-    # Earnings blackout
-    earnings_blackout_days: int = 5
-    
-    # Market data
-    min_ticks_before_signals: int = 20
-    
-    # Scan intervals (faster with WebSocket)
-    scan_interval_sec: int = 5  # Reduced from 10 - WebSocket gives faster data
-    position_check_interval_sec: int = 2  # Check positions every 2 sec
-    
-    # Opening range period
-    opening_range_minutes: int = 15  # First 15 min for ORB
+    daily_loss_limit_pct: float = 0.04    # 4% daily loss = lock trading
+    cooldown_after_loss_sec: int = 600    # 10 min cooldown after loss
+
+    # Position limits
+    max_positions: int = 5                # VIP tier max
+    position_size_pct: float = 0.05       # 5% of account per trade
 
 
 @dataclass
@@ -133,27 +81,61 @@ class TradingWindows:
 
 
 @dataclass
-class SetupWeights:
-    """Weights for HOT score calculation (0-100)"""
-    rvol_max_points: int = 25       # Relative volume
-    key_level_points: int = 15      # Near support/resistance
-    trend_regime_points: int = 15   # TREND market bonus
-    volume_spike_points: int = 10   # 2x+ volume spike
-    good_spread_points: int = 10    # Tight bid-ask
-    greeks_quality_points: int = 15 # Good delta/theta/IV (NEW)
-    multi_timeframe_points: int = 10 # Multi-TF alignment (NEW)
+class SignalConfig:
+    """Signal quality requirements"""
+    hot_score_minimum: int = 70           # Minimum HOT score
+    confirmation_checks: int = 3          # 3 checks over 15 sec
+    confirmation_interval_sec: int = 5    # 5 sec between checks
+    min_rvol: float = 1.5                 # Relative volume minimum
+    scan_interval_sec: int = 10           # Poll every 10 sec
+    position_check_interval_sec: int = 5  # Check positions every 5 sec
 
 
+@dataclass
+class OptionFilters:
+    """Option quality filters"""
+    max_spread_pct: float = 0.10          # Max 10% bid-ask spread
+    min_volume: int = 10                  # Minimum option volume
+    min_open_interest: int = 50           # Minimum open interest
+    min_delta: float = 0.30               # Minimum delta
+    max_delta: float = 0.70               # Maximum delta
+    max_dte: int = 14                     # Max days to expiration
+    min_dte: int = 1                      # Min days to expiration
+
+
+# ==================== HOT SCORE WEIGHTS ====================
+
+@dataclass
+class HotScoreWeights:
+    """HOT score component weights (total = 100)"""
+    regime: int = 25          # Market regime (TREND = 25, MIXED = 10, CHOP = 0)
+    setup_quality: int = 20   # A+ setup match quality
+    rvol: int = 15            # Relative volume
+    trend_alignment: int = 15 # EMA alignment
+    vwap_position: int = 10   # Price vs VWAP
+    spread_quality: int = 10  # Bid-ask spread tightness
+    time_of_day: int = 5      # First 30 min = 5, rest = 3
+
+
+# ==================== MASTER CONFIG ====================
+
+@dataclass
 class Config:
-    """Main configuration container"""
-    
-    def __init__(self):
-        self.tradier = TradierConfig.from_env()
-        self.twilio = TwilioConfig.from_env()
-        self.trading = TradingConfig()
-        self.windows = TradingWindows()
-        self.weights = SetupWeights()
-    
+    tradier: TradierConfig = None
+    twilio: TwilioConfig = None
+    risk: RiskConfig = field(default_factory=RiskConfig)
+    windows: TradingWindows = field(default_factory=TradingWindows)
+    signals: SignalConfig = field(default_factory=SignalConfig)
+    options: OptionFilters = field(default_factory=OptionFilters)
+    hot_weights: HotScoreWeights = field(default_factory=HotScoreWeights)
+
+    @classmethod
+    def from_env(cls) -> "Config":
+        return cls(
+            tradier=TradierConfig.from_env(),
+            twilio=TwilioConfig.from_env()
+        )
+
     def validate(self) -> list:
         errors = []
         if not self.tradier.api_key:
@@ -161,49 +143,29 @@ class Config:
         if not self.tradier.account_id:
             errors.append("TRADIER_ACCOUNT_ID not set")
         if not self.twilio.account_sid:
-            errors.append("TWILIO_ACCOUNT_SID not set (alerts disabled)")
-        if not self.twilio.auth_token:
-            errors.append("TWILIO_AUTH_TOKEN not set (alerts disabled)")
-        if not self.twilio.from_number:
-            errors.append("TWILIO_FROM_NUMBER not set (alerts disabled)")
-        if not self.twilio.to_number:
-            errors.append("ALERT_PHONE_NUMBER not set (alerts disabled)")
+            errors.append("TWILIO_ACCOUNT_SID not set (SMS disabled)")
         return errors
 
 
 # ==================== WATCHLIST ====================
 
 WATCHLIST = [
-    # ETFs
-    "SPY", "QQQ", "IWM",
-    # Big Tech
-    "AAPL", "MSFT", "NVDA", "AMD", "TSLA", "META", "GOOGL", "AMZN", "NFLX",
-    # Retail favorites
-    "SOFI", "PLTR", "NIO", "RIVN", "HOOD", "SNAP", "COIN", "MARA", "RIOT",
-    # Financials
-    "JPM", "BAC", "C",
-    # Energy
-    "XOM", "CVX",
-    # Airlines
-    "AAL", "UAL", "DAL",
-    # Other high-volume
-    "F", "GM", "BA", "DIS", "PYPL", "SQ", "ROKU", "UBER"
+    "SPY", "QQQ", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA",
+    "TSLA", "AMD", "NFLX", "CRM", "ORCL", "ADBE", "INTC",
+    "BA", "DIS", "NKE", "SBUX", "HD", "LOW", "TGT", "WMT",
+    "JPM", "GS", "BAC", "V", "MA", "PYPL",
+    "XOM", "CVX", "PFE", "JNJ", "UNH", "ABBV",
+    "COIN", "MARA", "PLTR"
 ]
 
 
-# ==================== NEWS FILTERS ====================
+# ==================== NEWS KEYWORDS ====================
 
 NEGATIVE_NEWS_KEYWORDS = [
-    "lawsuit", "sued", "investigation", "fraud", "scandal", "sec probe",
-    "subpoena", "indictment", "settlement", "fine", "penalty",
-    "bankruptcy", "default", "restructuring", "layoff", "layoffs",
-    "guidance cut", "miss estimate", "downgrade", "debt", "liquidity",
-    "ceo resign", "cfo resign", "executive depart", "accounting",
-    "restatement", "audit", "material weakness",
-    "recall", "fda reject", "clinical fail", "supply chain",
-    "production halt", "shortage",
-    "hack", "breach", "ransomware", "data leak", "cyber attack",
-    "plunge", "crash", "tumble", "sink", "collapse"
+    "downgrade", "miss estimate", "lower guidance", "lawsuit",
+    "investigation", "recall", "data breach", "layoff", "bankruptcy",
+    "SEC probe", "FDA reject", "trade war", "sanction", "default",
+    "crash", "fraud", "scandal", "indictment", "subpoena"
 ]
 
 POSITIVE_NEWS_KEYWORDS = [
@@ -213,20 +175,18 @@ POSITIVE_NEWS_KEYWORDS = [
 ]
 
 
-# ==================== SETUP TYPES ====================
-
-class SetupType:
-    OPENING_RANGE_BREAK = "ORB"
-    VWAP_BOUNCE = "VWAP"
-    PULLBACK_CONTINUATION = "PULLBACK"
-    BREAK_AND_RETEST = "RETEST"
-    ALL = [OPENING_RANGE_BREAK, VWAP_BOUNCE, PULLBACK_CONTINUATION, BREAK_AND_RETEST]
-
-
-# ==================== MARKET REGIMES ====================
+# ==================== ENUMS ====================
 
 class MarketRegime:
     TREND = "TREND"
     MIXED = "MIXED"
     CHOP = "CHOP"
     UNKNOWN = "UNKNOWN"
+
+
+class SetupType:
+    OPENING_RANGE_BREAK = "ORB"
+    VWAP_BOUNCE = "VWAP"
+    PULLBACK_CONTINUATION = "PULLBACK"
+    BREAK_AND_RETEST = "RETEST"
+    ALL = ["ORB", "VWAP", "PULLBACK", "RETEST"]

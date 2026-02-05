@@ -1,418 +1,322 @@
 """
-PROJECT HOPE - Position Manager
-Tracks open positions and manages exits, partials, and stops
+PROJECT HOPE V1 - Position Manager
+Tracks all positions, handles partials, stops, breakeven,
+cooldowns, daily loss limit, and duplicate protection
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
-from enum import Enum
 
-from config import Config, TradingConfig
+import pytz
+
+from config import Config
 
 logger = logging.getLogger(__name__)
 
-
-class PositionState(Enum):
-    """Position lifecycle states"""
-    OPEN = "open"
-    PARTIAL_1_TAKEN = "partial_1"  # 50% sold at +15%
-    PARTIAL_2_TAKEN = "partial_2"  # 25% more sold at +25%
-    BREAKEVEN_SET = "breakeven"    # Stop moved to entry
-    CLOSED = "closed"
+ET = pytz.timezone('US/Eastern')
 
 
 @dataclass
 class Position:
-    """Tracks a single position with all management state"""
-    # Identity
+    """Tracked position"""
     symbol: str
     option_symbol: str
-    side: str  # "CALL" or "PUT"
-    setup_type: str
-    
-    # Entry
+    direction: str  # "CALL" or "PUT"
+    setup: str
+    quantity: int
+    original_quantity: int
     entry_price: float
-    entry_quantity: int
+    current_price: float
+    stop_price: float
     entry_time: datetime
-    entry_cost: float = 0.0
-    
-    # Current state
-    current_quantity: int = 0
-    current_price: float = 0.0
-    state: PositionState = PositionState.OPEN
-    
-    # Stop management
-    stop_price: float = 0.0
-    original_stop: float = 0.0
-    stop_at_breakeven: bool = False
-    
-    # Profit tracking
+    hot_score: int
+
+    # Partial tracking
+    t1_hit: bool = False     # +15% partial
+    t2_hit: bool = False     # +25% partial
+    breakeven_set: bool = False  # Stop moved to entry
+
+    # P&L
+    unrealized_pnl: float = 0.0
     realized_pnl: float = 0.0
-    partial_1_price: float = 0.0
-    partial_1_qty: int = 0
-    partial_2_price: float = 0.0
-    partial_2_qty: int = 0
-    
-    # HOT score at entry
-    hot_score: int = 0
-    
-    def __post_init__(self):
-        self.current_quantity = self.entry_quantity
-        self.entry_cost = self.entry_price * self.entry_quantity * 100
-        self.original_stop = self.stop_price
-    
+
     @property
-    def unrealized_pnl(self) -> float:
-        """Calculate unrealized P&L"""
-        if self.current_quantity <= 0:
-            return 0
-        current_value = self.current_price * self.current_quantity * 100
-        remaining_cost = self.entry_price * self.current_quantity * 100
-        return current_value - remaining_cost
-    
-    @property
-    def unrealized_pnl_pct(self) -> float:
-        """Calculate unrealized P&L percentage"""
+    def pnl_pct(self) -> float:
         if self.entry_price <= 0:
-            return 0
-        return ((self.current_price - self.entry_price) / self.entry_price) * 100
-    
-    @property
-    def total_pnl(self) -> float:
-        """Total P&L (realized + unrealized)"""
-        return self.realized_pnl + self.unrealized_pnl
-    
-    @property
-    def total_pnl_pct(self) -> float:
-        """Total P&L percentage"""
-        if self.entry_cost <= 0:
-            return 0
-        return (self.total_pnl / self.entry_cost) * 100
+            return 0.0
+        return (self.current_price - self.entry_price) / self.entry_price
+
+    def update_price(self, price: float):
+        self.current_price = price
+        self.unrealized_pnl = (price - self.entry_price) * self.quantity * 100
 
 
 class PositionManager:
-    """Manages all open positions and their lifecycle"""
-    
+    """Manages all position tracking and risk rules"""
+
     def __init__(self, config: Config):
         self.config = config
-        self.trading_config = config.trading
-        
-        # Active positions by option symbol
+
+        # Active positions
         self.positions: Dict[str, Position] = {}
-        
-        # Closed positions (for daily tracking)
-        self.closed_positions: List[Position] = []
-        
-        # Daily P&L tracking
-        self.daily_realized_pnl: float = 0.0
+
+        # Daily tracking
+        self.daily_pnl: float = 0.0
         self.daily_starting_balance: float = 0.0
-        self.daily_loss_limit_hit: bool = False
-        
-        # Cooldown tracking
+        self.trading_locked: bool = False
+        self.lock_reason: str = ""
+
+        # Cooldown
         self.cooldown_until: Optional[datetime] = None
         self.last_loss_time: Optional[datetime] = None
-        
-        # Symbols we're already in (duplicate protection)
-        self.active_symbols: set = set()
-    
-    # ==================== POSITION LIFECYCLE ====================
-    
-    def open_position(self, symbol: str, option_symbol: str, side: str,
-                      quantity: int, entry_price: float, stop_price: float,
-                      setup_type: str, hot_score: int) -> Position:
-        """Open a new position"""
-        position = Position(
+
+        # Trade history (today)
+        self.trades_today: List[dict] = []
+
+        # Symbols currently held (duplicate protection)
+        self.held_symbols: set = set()
+
+    def set_daily_starting_balance(self, balance: float):
+        self.daily_starting_balance = balance
+
+    # ==================== POSITION MANAGEMENT ====================
+
+    def add_position(self, symbol: str, option_symbol: str, direction: str,
+                     setup: str, quantity: int, entry_price: float,
+                     stop_price: float, hot_score: int) -> bool:
+        """Add a new position"""
+        # Check max positions
+        if len(self.positions) >= self.config.risk.max_positions:
+            logger.warning(f"⚠️ Max positions ({self.config.risk.max_positions}) reached")
+            return False
+
+        # Duplicate protection
+        if symbol in self.held_symbols:
+            logger.warning(f"⚠️ Already holding {symbol}")
+            return False
+
+        pos = Position(
             symbol=symbol,
             option_symbol=option_symbol,
-            side=side,
-            setup_type=setup_type,
+            direction=direction,
+            setup=setup,
+            quantity=quantity,
+            original_quantity=quantity,
             entry_price=entry_price,
-            entry_quantity=quantity,
-            entry_time=datetime.now(),
+            current_price=entry_price,
             stop_price=stop_price,
+            entry_time=datetime.now(ET),
             hot_score=hot_score
         )
-        
-        self.positions[option_symbol] = position
-        self.active_symbols.add(symbol)
-        
+
+        self.positions[option_symbol] = pos
+        self.held_symbols.add(symbol)
+
         logger.info(
-            f"📥 Opened: {symbol} {side} x{quantity} @ ${entry_price:.2f} "
+            f"📥 Position added: {symbol} {direction} x{quantity} @ ${entry_price:.2f} "
             f"| Stop: ${stop_price:.2f} | HOT: {hot_score}"
         )
-        
-        return position
-    
-    def close_position(self, option_symbol: str, exit_price: float, 
-                       reason: str) -> Optional[Position]:
-        """Close a position completely"""
-        position = self.positions.get(option_symbol)
-        if not position:
-            logger.warning(f"Position not found: {option_symbol}")
+        return True
+
+    def remove_position(self, option_symbol: str, exit_price: float, reason: str) -> Optional[dict]:
+        """Remove a position and record the trade"""
+        pos = self.positions.get(option_symbol)
+        if not pos:
             return None
-        
-        # Calculate final P&L
-        remaining_qty = position.current_quantity
-        if remaining_qty > 0:
-            exit_value = exit_price * remaining_qty * 100
-            cost_basis = position.entry_price * remaining_qty * 100
-            final_pnl = exit_value - cost_basis
-            position.realized_pnl += final_pnl
-        
-        position.current_quantity = 0
-        position.current_price = exit_price
-        position.state = PositionState.CLOSED
-        
-        # Track daily P&L
-        self.daily_realized_pnl += position.realized_pnl
-        
-        # Check if this was a loss
-        if position.realized_pnl < 0:
-            self._handle_loss(position)
-        
-        # Move to closed and remove from active
-        self.closed_positions.append(position)
+
+        # Calculate P&L
+        pnl = (exit_price - pos.entry_price) * pos.quantity * 100
+        pnl_pct = pos.pnl_pct
+
+        # Record trade
+        trade = {
+            "symbol": pos.symbol,
+            "option_symbol": option_symbol,
+            "direction": pos.direction,
+            "setup": pos.setup,
+            "quantity": pos.quantity,
+            "entry_price": pos.entry_price,
+            "exit_price": exit_price,
+            "pnl": pnl,
+            "pnl_pct": pnl_pct,
+            "reason": reason,
+            "hot_score": pos.hot_score,
+            "entry_time": pos.entry_time,
+            "exit_time": datetime.now(ET),
+            "held_seconds": (datetime.now(ET) - pos.entry_time).total_seconds()
+        }
+        self.trades_today.append(trade)
+
+        # Update daily P&L
+        self.daily_pnl += pnl
+
+        # Check if loss → trigger cooldown
+        if pnl < 0:
+            self.last_loss_time = datetime.now(ET)
+            self.cooldown_until = self.last_loss_time + timedelta(
+                seconds=self.config.risk.cooldown_after_loss_sec
+            )
+            logger.info(f"⏸️ Cooldown activated until {self.cooldown_until.strftime('%H:%M:%S')}")
+
+        # Check daily loss limit
+        if self.daily_starting_balance > 0:
+            loss_pct = abs(self.daily_pnl) / self.daily_starting_balance
+            if self.daily_pnl < 0 and loss_pct >= self.config.risk.daily_loss_limit_pct:
+                self.trading_locked = True
+                self.lock_reason = f"Daily loss limit hit: {loss_pct:.1%}"
+                logger.warning(f"🔒 {self.lock_reason}")
+
+        # Clean up
+        self.held_symbols.discard(pos.symbol)
         del self.positions[option_symbol]
-        self.active_symbols.discard(position.symbol)
-        
+
         logger.info(
-            f"📤 Closed: {position.symbol} {position.side} | "
-            f"P&L: ${position.realized_pnl:.2f} ({position.total_pnl_pct:.1f}%) | "
-            f"Reason: {reason}"
+            f"📤 Position closed: {pos.symbol} {reason} | "
+            f"P&L: ${pnl:+,.2f} ({pnl_pct:+.1%})"
         )
-        
-        return position
-    
-    def partial_close(self, option_symbol: str, quantity: int, 
-                      exit_price: float, partial_num: int) -> bool:
-        """Close part of a position (partial profit)"""
-        position = self.positions.get(option_symbol)
-        if not position or quantity > position.current_quantity:
-            return False
-        
-        # Calculate P&L for this partial
-        partial_value = exit_price * quantity * 100
-        partial_cost = position.entry_price * quantity * 100
-        partial_pnl = partial_value - partial_cost
-        
-        position.realized_pnl += partial_pnl
-        position.current_quantity -= quantity
-        
-        if partial_num == 1:
-            position.partial_1_price = exit_price
-            position.partial_1_qty = quantity
-            position.state = PositionState.PARTIAL_1_TAKEN
-        elif partial_num == 2:
-            position.partial_2_price = exit_price
-            position.partial_2_qty = quantity
-            position.state = PositionState.PARTIAL_2_TAKEN
-        
-        logger.info(
-            f"📈 Partial T{partial_num}: {position.symbol} | "
-            f"Sold {quantity} @ ${exit_price:.2f} | "
-            f"P&L: ${partial_pnl:.2f} | Remaining: {position.current_quantity}"
-        )
-        
-        return True
-    
-    def update_stop_to_breakeven(self, option_symbol: str) -> bool:
-        """Move stop to breakeven"""
-        position = self.positions.get(option_symbol)
-        if not position or position.stop_at_breakeven:
-            return False
-        
-        position.stop_price = position.entry_price
-        position.stop_at_breakeven = True
-        position.state = PositionState.BREAKEVEN_SET
-        
-        logger.info(f"🔒 Breakeven: {position.symbol} stop → ${position.entry_price:.2f}")
-        
-        return True
-    
-    # ==================== PRICE CHECKS ====================
-    
-    def check_positions(self, option_quotes: Dict[str, Dict]) -> List[Dict]:
+        return trade
+
+    # ==================== POSITION CHECKS ====================
+
+    def check_positions(self, option_quotes: Dict[str, float]) -> List[dict]:
         """
-        Check all positions against current prices.
+        Check all positions for stops, targets, partials.
         Returns list of actions to take.
         """
         actions = []
-        
-        for option_symbol, position in list(self.positions.items()):
-            quote = option_quotes.get(option_symbol)
-            if not quote:
+
+        for opt_sym, pos in list(self.positions.items()):
+            price = option_quotes.get(opt_sym, pos.current_price)
+            if price <= 0:
                 continue
-            
-            # Update current price
-            current_price = quote.get("last") or quote.get("bid") or 0
-            if current_price <= 0:
-                continue
-            
-            position.current_price = current_price
-            pnl_pct = position.unrealized_pnl_pct
-            
-            # Check stop loss (-25%)
-            if pnl_pct <= self.trading_config.stop_loss_pct * 100:
+
+            pos.update_price(price)
+            pnl_pct = pos.pnl_pct
+
+            # 1. STOP LOSS (-25%)
+            if pnl_pct <= self.config.risk.stop_loss_pct:
                 actions.append({
-                    "action": "STOP_LOSS",
-                    "option_symbol": option_symbol,
-                    "quantity": position.current_quantity,
-                    "price": current_price,
-                    "pnl_pct": pnl_pct,
-                    "reason": f"Stop loss hit ({pnl_pct:.1f}%)"
+                    "action": "close",
+                    "option_symbol": opt_sym,
+                    "quantity": pos.quantity,
+                    "reason": f"Stop loss ({pnl_pct:.1%})",
+                    "price": price
                 })
                 continue
-            
-            # Check take profit (+30%)
-            if pnl_pct >= self.trading_config.take_profit_pct * 100:
+
+            # 2. TAKE PROFIT (+30%)
+            if pnl_pct >= self.config.risk.take_profit_pct:
                 actions.append({
-                    "action": "TAKE_PROFIT",
-                    "option_symbol": option_symbol,
-                    "quantity": position.current_quantity,
-                    "price": current_price,
-                    "pnl_pct": pnl_pct,
-                    "reason": f"Take profit hit (+{pnl_pct:.1f}%)"
+                    "action": "close",
+                    "option_symbol": opt_sym,
+                    "quantity": pos.quantity,
+                    "reason": f"Take profit ({pnl_pct:.1%})",
+                    "price": price
                 })
                 continue
-            
-            # Check breakeven trigger (+10%)
-            if (pnl_pct >= self.trading_config.breakeven_trigger * 100 
-                and not position.stop_at_breakeven):
-                actions.append({
-                    "action": "SET_BREAKEVEN",
-                    "option_symbol": option_symbol,
-                    "price": position.entry_price
-                })
-            
-            # Check partial 1 (+15%, sell 50%)
-            if (pnl_pct >= self.trading_config.partial_1_trigger * 100 
-                and position.state == PositionState.OPEN):
-                sell_qty = int(position.current_quantity * self.trading_config.partial_1_sell_pct)
-                if sell_qty > 0:
+
+            # 3. PARTIAL T1 (+15% → sell 50%)
+            if not pos.t1_hit and pnl_pct >= self.config.risk.partial_t1_pct:
+                sell_qty = max(1, int(pos.quantity * self.config.risk.partial_t1_sell))
+                if sell_qty > 0 and pos.quantity > 1:
                     actions.append({
-                        "action": "PARTIAL_1",
-                        "option_symbol": option_symbol,
+                        "action": "partial",
+                        "option_symbol": opt_sym,
                         "quantity": sell_qty,
-                        "price": current_price,
-                        "pnl_pct": pnl_pct
+                        "reason": f"T1 partial ({pnl_pct:.1%})",
+                        "price": price,
+                        "tier": "T1"
                     })
-            
-            # Check partial 2 (+25%, sell 25% more)
-            if (pnl_pct >= self.trading_config.partial_2_trigger * 100 
-                and position.state == PositionState.PARTIAL_1_TAKEN):
-                sell_qty = int(position.entry_quantity * self.trading_config.partial_2_sell_pct)
-                sell_qty = min(sell_qty, position.current_quantity)
-                if sell_qty > 0:
+                pos.t1_hit = True
+
+            # 4. PARTIAL T2 (+25% → sell 25% more)
+            if not pos.t2_hit and pos.t1_hit and pnl_pct >= self.config.risk.partial_t2_pct:
+                sell_qty = max(1, int(pos.original_quantity * self.config.risk.partial_t2_sell))
+                if sell_qty > 0 and pos.quantity > 1:
                     actions.append({
-                        "action": "PARTIAL_2",
-                        "option_symbol": option_symbol,
+                        "action": "partial",
+                        "option_symbol": opt_sym,
                         "quantity": sell_qty,
-                        "price": current_price,
-                        "pnl_pct": pnl_pct
+                        "reason": f"T2 partial ({pnl_pct:.1%})",
+                        "price": price,
+                        "tier": "T2"
                     })
-        
+                pos.t2_hit = True
+
+            # 5. BREAKEVEN (+10% → move stop to entry)
+            if not pos.breakeven_set and pnl_pct >= self.config.risk.breakeven_trigger_pct:
+                pos.stop_price = pos.entry_price
+                pos.breakeven_set = True
+                actions.append({
+                    "action": "breakeven",
+                    "option_symbol": opt_sym,
+                    "reason": f"Stop → breakeven ({pnl_pct:.1%})",
+                    "price": pos.entry_price
+                })
+
         return actions
-    
-    # ==================== RISK MANAGEMENT ====================
-    
-    def _handle_loss(self, position: Position):
-        """Handle loss - set cooldown"""
-        self.last_loss_time = datetime.now()
-        cooldown_minutes = self.trading_config.loss_cooldown_minutes
-        self.cooldown_until = datetime.now() + timedelta(minutes=cooldown_minutes)
-        logger.warning(f"⏸️ Loss on {position.symbol} - {cooldown_minutes}min cooldown")
-    
-    def is_on_cooldown(self) -> bool:
-        """Check if we're in cooldown period"""
-        if self.cooldown_until is None:
-            return False
-        if datetime.now() >= self.cooldown_until:
-            self.cooldown_until = None
-            return False
-        return True
-    
-    def get_cooldown_remaining(self) -> int:
-        """Get remaining cooldown seconds"""
-        if not self.cooldown_until:
-            return 0
-        remaining = (self.cooldown_until - datetime.now()).total_seconds()
-        return max(0, int(remaining))
-    
-    def check_daily_loss_limit(self, account_balance: float) -> bool:
-        """Check if daily loss limit hit. Returns True if locked."""
-        if self.daily_loss_limit_hit:
-            return True
-        
-        if account_balance <= 0:
-            return False
-        
-        loss_pct = abs(self.daily_realized_pnl) / account_balance
-        if self.daily_realized_pnl < 0 and loss_pct >= self.trading_config.daily_loss_limit_pct:
-            self.daily_loss_limit_hit = True
-            logger.error(f"🚨 DAILY LOSS LIMIT: ${self.daily_realized_pnl:.2f} ({loss_pct*100:.1f}%)")
-            return True
-        
-        return False
-    
-    def set_daily_starting_balance(self, balance: float):
-        """Set starting balance for daily tracking"""
-        self.daily_starting_balance = balance
-    
-    # ==================== QUERIES ====================
-    
-    def get_position_count(self) -> int:
-        """Get number of open positions"""
-        return len(self.positions)
-    
-    def has_position(self, symbol: str) -> bool:
-        """Check if we have a position in this underlying"""
-        return symbol in self.active_symbols
-    
-    def can_open_position(self) -> bool:
-        """Check if we can open a new position"""
-        if len(self.positions) >= self.trading_config.max_positions:
-            return False
-        if self.daily_loss_limit_hit:
-            return False
-        if self.is_on_cooldown():
-            return False
-        return True
-    
-    def get_position(self, option_symbol: str) -> Optional[Position]:
-        """Get a specific position"""
-        return self.positions.get(option_symbol)
-    
-    def get_all_positions(self) -> List[Position]:
-        """Get all open positions"""
-        return list(self.positions.values())
-    
-    def get_option_symbols(self) -> List[str]:
-        """Get all option symbols we have positions in"""
-        return list(self.positions.keys())
-    
-    def get_daily_stats(self) -> Dict:
-        """Get daily trading statistics"""
-        winners = len([p for p in self.closed_positions if p.realized_pnl > 0])
-        losers = len([p for p in self.closed_positions if p.realized_pnl < 0])
-        
-        return {
-            "trades": len(self.closed_positions),
-            "winners": winners,
-            "losers": losers,
-            "win_rate": (winners / len(self.closed_positions) * 100) if self.closed_positions else 0,
-            "realized_pnl": self.daily_realized_pnl,
-            "open_positions": len(self.positions),
-            "daily_limit_hit": self.daily_loss_limit_hit,
-            "on_cooldown": self.is_on_cooldown(),
-        }
-    
-    def reset_daily(self):
+
+    def execute_partial(self, option_symbol: str, quantity: int, price: float):
+        """Record a partial sell"""
+        pos = self.positions.get(option_symbol)
+        if pos:
+            pnl = (price - pos.entry_price) * quantity * 100
+            pos.realized_pnl += pnl
+            pos.quantity -= quantity
+            self.daily_pnl += pnl
+            logger.info(f"📈 Partial: {pos.symbol} sold {quantity} @ ${price:.2f} (+${pnl:.2f})")
+
+    # ==================== RISK CHECKS ====================
+
+    def can_trade(self) -> tuple:
+        """Check if trading is allowed. Returns (allowed, reason)"""
+        # Daily loss limit
+        if self.trading_locked:
+            return False, self.lock_reason
+
+        # Cooldown
+        if self.cooldown_until:
+            now = datetime.now(ET)
+            if now < self.cooldown_until:
+                remaining = (self.cooldown_until - now).total_seconds()
+                return False, f"Cooldown: {remaining:.0f}s remaining"
+            else:
+                self.cooldown_until = None
+
+        # Max positions
+        if len(self.positions) >= self.config.risk.max_positions:
+            return False, f"Max positions ({self.config.risk.max_positions})"
+
+        return True, "OK"
+
+    def is_duplicate(self, symbol: str) -> bool:
+        """Check duplicate protection"""
+        return symbol in self.held_symbols
+
+    # ==================== DAILY RESET ====================
+
+    def reset_daily(self, new_balance: float):
         """Reset for new trading day"""
-        self.closed_positions.clear()
-        self.daily_realized_pnl = 0.0
-        self.daily_loss_limit_hit = False
+        self.daily_pnl = 0.0
+        self.daily_starting_balance = new_balance
+        self.trading_locked = False
+        self.lock_reason = ""
         self.cooldown_until = None
         self.last_loss_time = None
-        logger.info("🔄 Position manager reset for new day")
+        self.trades_today = []
+        logger.info(f"🔄 Position manager reset | Balance: ${new_balance:,.2f}")
+
+    # ==================== STATUS ====================
+
+    def get_status(self) -> dict:
+        return {
+            "positions": len(self.positions),
+            "max_positions": self.config.risk.max_positions,
+            "daily_pnl": self.daily_pnl,
+            "trading_locked": self.trading_locked,
+            "cooldown_active": self.cooldown_until is not None,
+            "trades_today": len(self.trades_today)
+        }
