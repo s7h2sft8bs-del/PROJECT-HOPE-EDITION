@@ -98,11 +98,11 @@ class TradingConfig:
 
 @dataclass 
 class TradingWindows:
-    """Trading time windows (ET) - HIGH PROBABILITY ONLY"""
-    morning_start: str = "09:30"
-    morning_end: str = "10:30"
-    afternoon_start: str = "15:00"
-    afternoon_end: str = "15:55"
+    """Trading time windows (ET) - TESTING ALL DAY"""
+    morning_start: str = "04:00"
+    morning_end: str = "20:00"
+    afternoon_start: str = "04:00"
+    afternoon_end: str = "20:00"
 
 
 @dataclass
