@@ -1,7 +1,13 @@
 """
-PROJECT HOPE V1 - Position Manager
+PROJECT HOPE V1 - Position Manager (FIXED)
 Tracks all positions, handles partials, stops, breakeven,
 cooldowns, daily loss limit, and duplicate protection
+
+FIXES:
+- Added last_trade_time tracking for trade cooldown
+- Partial T1/T2 now works with ANY quantity (even 1 contract)
+- can_trade() now enforces trade_cooldown_sec between ANY trade
+- Better logging for profit checks
 """
 
 import logging
@@ -69,9 +75,12 @@ class PositionManager:
         self.trading_locked: bool = False
         self.lock_reason: str = ""
 
-        # Cooldown
+        # Cooldown after loss
         self.cooldown_until: Optional[datetime] = None
         self.last_loss_time: Optional[datetime] = None
+
+        # FIX: Cooldown between ANY trade
+        self.last_trade_time: Optional[datetime] = None
 
         # Trade history (today)
         self.trades_today: List[dict] = []
@@ -115,9 +124,13 @@ class PositionManager:
         self.positions[option_symbol] = pos
         self.held_symbols.add(symbol)
 
+        # FIX: Record trade time for cooldown
+        self.last_trade_time = datetime.now(ET)
+
         logger.info(
             f"📥 Position added: {symbol} {direction} x{quantity} @ ${entry_price:.2f} "
-            f"| Stop: ${stop_price:.2f} | HOT: {hot_score}"
+            f"| Stop: ${stop_price:.2f} | HOT: {hot_score} "
+            f"| Positions: {len(self.positions)}/{self.config.risk.max_positions}"
         )
         return True
 
@@ -159,7 +172,7 @@ class PositionManager:
             self.cooldown_until = self.last_loss_time + timedelta(
                 seconds=self.config.risk.cooldown_after_loss_sec
             )
-            logger.info(f"⏸️ Cooldown activated until {self.cooldown_until.strftime('%H:%M:%S')}")
+            logger.info(f"⏸️ Loss cooldown activated until {self.cooldown_until.strftime('%H:%M:%S')}")
 
         # Check daily loss limit
         if self.daily_starting_balance > 0:
@@ -175,7 +188,8 @@ class PositionManager:
 
         logger.info(
             f"📤 Position closed: {pos.symbol} {reason} | "
-            f"P&L: ${pnl:+,.2f} ({pnl_pct:+.1%})"
+            f"P&L: ${pnl:+,.2f} ({pnl_pct:+.1%}) | "
+            f"Positions remaining: {len(self.positions)}"
         )
         return trade
 
@@ -185,19 +199,30 @@ class PositionManager:
         """
         Check all positions for stops, targets, partials.
         Returns list of actions to take.
+
+        FIX: Better logging, works with 1 contract positions
         """
         actions = []
 
         for opt_sym, pos in list(self.positions.items()):
-            price = option_quotes.get(opt_sym, pos.current_price)
+            price = option_quotes.get(opt_sym, 0)
             if price <= 0:
+                # FIX: Log when we can't get a price - this is likely the problem
+                logger.warning(f"⚠️ No price for {pos.symbol} ({opt_sym}) - skipping checks")
                 continue
 
             pos.update_price(price)
             pnl_pct = pos.pnl_pct
 
+            # Log position status every check
+            logger.debug(
+                f"📋 {pos.symbol}: ${price:.2f} | P&L: {pnl_pct:+.1%} | "
+                f"Qty: {pos.quantity} | T1:{pos.t1_hit} T2:{pos.t2_hit} BE:{pos.breakeven_set}"
+            )
+
             # 1. STOP LOSS (-25%)
             if pnl_pct <= self.config.risk.stop_loss_pct:
+                logger.info(f"🛑 STOP LOSS triggered: {pos.symbol} at {pnl_pct:.1%}")
                 actions.append({
                     "action": "close",
                     "option_symbol": opt_sym,
@@ -209,6 +234,7 @@ class PositionManager:
 
             # 2. TAKE PROFIT (+30%)
             if pnl_pct >= self.config.risk.take_profit_pct:
+                logger.info(f"💰 TAKE PROFIT triggered: {pos.symbol} at {pnl_pct:.1%}")
                 actions.append({
                     "action": "close",
                     "option_symbol": opt_sym,
@@ -219,9 +245,24 @@ class PositionManager:
                 continue
 
             # 3. PARTIAL T1 (+15% → sell 50%)
+            # FIX: Works with any quantity. If qty=1, T1 closes the whole position.
             if not pos.t1_hit and pnl_pct >= self.config.risk.partial_t1_pct:
-                sell_qty = max(1, int(pos.quantity * self.config.risk.partial_t1_sell))
-                if sell_qty > 0 and pos.quantity > 1:
+                if pos.quantity == 1:
+                    # Only 1 contract: close it entirely at T1 profit
+                    logger.info(f"📈 T1 CLOSE (1 contract): {pos.symbol} at {pnl_pct:.1%}")
+                    actions.append({
+                        "action": "close",
+                        "option_symbol": opt_sym,
+                        "quantity": 1,
+                        "reason": f"T1 profit - single contract ({pnl_pct:.1%})",
+                        "price": price
+                    })
+                else:
+                    sell_qty = max(1, int(pos.quantity * self.config.risk.partial_t1_sell))
+                    logger.info(
+                        f"📈 T1 PARTIAL: {pos.symbol} selling {sell_qty} of {pos.quantity} "
+                        f"at {pnl_pct:.1%}"
+                    )
                     actions.append({
                         "action": "partial",
                         "option_symbol": opt_sym,
@@ -233,9 +274,25 @@ class PositionManager:
                 pos.t1_hit = True
 
             # 4. PARTIAL T2 (+25% → sell 25% more)
+            # FIX: Works with any remaining quantity
             if not pos.t2_hit and pos.t1_hit and pnl_pct >= self.config.risk.partial_t2_pct:
-                sell_qty = max(1, int(pos.original_quantity * self.config.risk.partial_t2_sell))
-                if sell_qty > 0 and pos.quantity > 1:
+                if pos.quantity == 1:
+                    # Only 1 left: close it
+                    logger.info(f"📈 T2 CLOSE (1 remaining): {pos.symbol} at {pnl_pct:.1%}")
+                    actions.append({
+                        "action": "close",
+                        "option_symbol": opt_sym,
+                        "quantity": 1,
+                        "reason": f"T2 profit - last contract ({pnl_pct:.1%})",
+                        "price": price
+                    })
+                elif pos.quantity > 1:
+                    sell_qty = max(1, int(pos.original_quantity * self.config.risk.partial_t2_sell))
+                    sell_qty = min(sell_qty, pos.quantity)  # Don't sell more than we have
+                    logger.info(
+                        f"📈 T2 PARTIAL: {pos.symbol} selling {sell_qty} of {pos.quantity} "
+                        f"at {pnl_pct:.1%}"
+                    )
                     actions.append({
                         "action": "partial",
                         "option_symbol": opt_sym,
@@ -250,6 +307,7 @@ class PositionManager:
             if not pos.breakeven_set and pnl_pct >= self.config.risk.breakeven_trigger_pct:
                 pos.stop_price = pos.entry_price
                 pos.breakeven_set = True
+                logger.info(f"🔒 BREAKEVEN set: {pos.symbol} stop → ${pos.entry_price:.2f}")
                 actions.append({
                     "action": "breakeven",
                     "option_symbol": opt_sym,
@@ -267,7 +325,10 @@ class PositionManager:
             pos.realized_pnl += pnl
             pos.quantity -= quantity
             self.daily_pnl += pnl
-            logger.info(f"📈 Partial: {pos.symbol} sold {quantity} @ ${price:.2f} (+${pnl:.2f})")
+            logger.info(
+                f"📈 Partial executed: {pos.symbol} sold {quantity} @ ${price:.2f} "
+                f"| P&L: +${pnl:.2f} | Remaining: {pos.quantity}"
+            )
 
     # ==================== RISK CHECKS ====================
 
@@ -277,14 +338,22 @@ class PositionManager:
         if self.trading_locked:
             return False, self.lock_reason
 
-        # Cooldown
+        # Loss cooldown (10 min after a loss)
         if self.cooldown_until:
             now = datetime.now(ET)
             if now < self.cooldown_until:
                 remaining = (self.cooldown_until - now).total_seconds()
-                return False, f"Cooldown: {remaining:.0f}s remaining"
+                return False, f"Loss cooldown: {remaining:.0f}s remaining"
             else:
                 self.cooldown_until = None
+
+        # FIX: Trade spacing cooldown (2 min between ANY new trade)
+        if self.last_trade_time:
+            now = datetime.now(ET)
+            elapsed = (now - self.last_trade_time).total_seconds()
+            if elapsed < self.config.risk.trade_cooldown_sec:
+                remaining = self.config.risk.trade_cooldown_sec - elapsed
+                return False, f"Trade cooldown: {remaining:.0f}s (2 min between trades)"
 
         # Max positions
         if len(self.positions) >= self.config.risk.max_positions:
@@ -306,6 +375,7 @@ class PositionManager:
         self.lock_reason = ""
         self.cooldown_until = None
         self.last_loss_time = None
+        self.last_trade_time = None  # FIX: Reset trade cooldown too
         self.trades_today = []
         logger.info(f"🔄 Position manager reset | Balance: ${new_balance:,.2f}")
 
@@ -318,5 +388,13 @@ class PositionManager:
             "daily_pnl": self.daily_pnl,
             "trading_locked": self.trading_locked,
             "cooldown_active": self.cooldown_until is not None,
+            "trade_cooldown_active": self._trade_on_cooldown(),
             "trades_today": len(self.trades_today)
         }
+
+    def _trade_on_cooldown(self) -> bool:
+        """Check if trade spacing cooldown is active"""
+        if not self.last_trade_time:
+            return False
+        elapsed = (datetime.now(ET) - self.last_trade_time).total_seconds()
+        return elapsed < self.config.risk.trade_cooldown_sec

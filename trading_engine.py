@@ -1,7 +1,15 @@
 """
-PROJECT HOPE V1 - Trading Engine
+PROJECT HOPE V1 - Trading Engine (FIXED)
 Main trading loop with REST polling.
 No WebSocket dependency. Scans, signals, executes, manages positions.
+
+FIXES:
+- _scan_and_trade re-checks can_trade() BEFORE each trade (not just once)
+- Position checks run FIRST, before scanning for new trades
+- _calc_position_size caps at max_contracts from config
+- Batch option quote fetching (1 API call instead of N)
+- Logs every position check with prices so you can see profits
+- Only takes 1 trade per scan cycle (best signal only)
 """
 
 import logging
@@ -24,7 +32,7 @@ ET = pytz.timezone('US/Eastern')
 
 class TradingEngine:
     """
-    V1 Trading Engine - REST polling
+    V1 Trading Engine - REST polling (FIXED)
     Scans market, generates signals, executes trades, manages positions
     """
 
@@ -48,11 +56,12 @@ class TradingEngine:
 
         # Timing
         self._last_position_check = 0
+        self._last_scan_time = 0
 
     def initialize(self) -> bool:
         """Initialize the trading engine"""
         logger.info("=" * 60)
-        logger.info("🚀 PROJECT HOPE V1 - Initializing...")
+        logger.info("🚀 PROJECT HOPE V1 (FIXED) - Initializing...")
         logger.info("=" * 60)
 
         # Validate config
@@ -81,9 +90,13 @@ class TradingEngine:
         mode = "SANDBOX" if self.config.tradier.is_sandbox() else "LIVE"
         self.alerts.alert_bot_started(mode, self.account_balance)
 
-        logger.info(f"✅ Engine initialized - REST polling mode")
+        logger.info(f"✅ Engine initialized (FIXED) - REST polling mode")
         logger.info(f"📊 Watching {len(WATCHLIST)} symbols")
         logger.info(f"⏱️ Scan interval: {self.config.signals.scan_interval_sec}s")
+        logger.info(f"⏱️ Position check interval: {self.config.signals.position_check_interval_sec}s")
+        logger.info(f"🔒 Max positions: {self.config.risk.max_positions}")
+        logger.info(f"🔒 Max contracts: {self.config.risk.max_contracts}")
+        logger.info(f"⏸️ Trade cooldown: {self.config.risk.trade_cooldown_sec}s between trades")
         return True
 
     def run(self):
@@ -95,8 +108,11 @@ class TradingEngine:
 
         try:
             while self.running:
+                loop_start = time.time()
                 self._trading_loop()
-                time.sleep(self.config.signals.scan_interval_sec)
+                # FIX: Sleep only 1 second between loops
+                # Position checks and scans have their own timers
+                time.sleep(1)
         except KeyboardInterrupt:
             logger.info("⏹️ Shutdown requested")
         except Exception as e:
@@ -108,6 +124,7 @@ class TradingEngine:
     def _trading_loop(self):
         """Single iteration of the trading loop"""
         now = datetime.now(ET)
+        current_time = time.time()
 
         # Check for new day
         self._check_new_day(now)
@@ -126,19 +143,20 @@ class TradingEngine:
                 logger.info("🔔 Trading window CLOSED")
             self.last_window_state = in_window
 
-        # Check existing positions (always, even outside window)
-        current_time = time.time()
+        # FIX: ALWAYS check positions FIRST (every 3 seconds)
+        # This is the #1 priority - profits must be taken before scanning
         if current_time - self._last_position_check >= self.config.signals.position_check_interval_sec:
             self._check_positions()
             self._last_position_check = current_time
 
-        # Scan for new trades only in trading window
-        if in_window:
+        # Scan for new trades only in trading window (every 15 seconds)
+        if in_window and (current_time - self._last_scan_time >= self.config.signals.scan_interval_sec):
             can_trade, reason = self.positions.can_trade()
             if can_trade:
                 self._scan_and_trade()
-            elif self.analyzer.scan_count % 12 == 0:  # Log every ~2 min
+            elif self.analyzer.scan_count % 8 == 0:  # Log periodically
                 logger.info(f"⏸️ Not trading: {reason}")
+            self._last_scan_time = current_time
 
         # Check regime changes
         self._check_regime_change()
@@ -146,11 +164,28 @@ class TradingEngine:
     # ==================== SCANNING ====================
 
     def _scan_and_trade(self):
-        """Scan for signals and execute trades"""
+        """
+        Scan for signals and execute trades.
+        
+        FIX: Only takes the BEST signal per scan cycle.
+        FIX: Re-checks can_trade() before executing.
+        """
         # Run analyzer update (fetches quotes, checks setups)
         signals = self.analyzer.update(WATCHLIST)
 
+        if not signals:
+            return
+
+        # Sort by HOT score, take the best one only
+        signals.sort(key=lambda s: s.hot_score, reverse=True)
+
         for signal in signals:
+            # FIX: Re-check can_trade before EVERY trade attempt
+            can_trade, reason = self.positions.can_trade()
+            if not can_trade:
+                logger.info(f"⏸️ Can't trade: {reason}")
+                break  # Stop trying - we're blocked
+
             # Duplicate check
             if self.positions.is_duplicate(signal.symbol):
                 logger.debug(f"⏭️ Skip {signal.symbol} - already holding")
@@ -162,13 +197,16 @@ class TradingEngine:
                 logger.info(f"⚠️ No suitable option for {signal.symbol} {signal.direction}")
                 continue
 
-            # Calculate position size
+            # Calculate position size (with hard cap)
             quantity = self._calc_position_size(option)
             if quantity <= 0:
                 continue
 
             # Execute trade
             self._execute_entry(signal, option, quantity)
+
+            # FIX: Only 1 trade per scan cycle - let position checks run
+            break
 
     def _find_option(self, signal: Signal) -> Optional[dict]:
         """Find best option contract for a signal"""
@@ -234,14 +272,13 @@ class TradingEngine:
                 if oi < self.config.options.min_open_interest:
                     continue
 
-                # Delta check (if available)
-                greeks = opt.get("greeks", {})
-                if greeks:
-                    delta = abs(float(greeks.get("delta", 0) or 0))
-                    if delta < self.config.options.min_delta or delta > self.config.options.max_delta:
-                        continue
+                # Delta check (from greeks)
+                greeks = opt.get("greeks", {}) or {}
+                delta = abs(float(greeks.get("delta", 0) or 0))
+                if delta > 0 and (delta < self.config.options.min_delta or delta > self.config.options.max_delta):
+                    continue
 
-                # Score: tighter spread + more volume + better delta = higher score
+                # Score this option
                 score = (1 - spread_pct) * 40 + min(volume / 100, 30) + min(oi / 500, 30)
 
                 if score > best_score:
@@ -267,7 +304,10 @@ class TradingEngine:
             return None
 
     def _calc_position_size(self, option: dict) -> int:
-        """Calculate number of contracts based on account size"""
+        """
+        Calculate number of contracts based on account size.
+        FIX: Hard capped at max_contracts from config.
+        """
         if self.account_balance <= 0:
             return 1
 
@@ -278,7 +318,17 @@ class TradingEngine:
             return 0
 
         quantity = int(max_risk / contract_cost)
-        return max(1, min(quantity, 10))  # 1-10 contracts
+
+        # FIX: Hard cap from config (default 5, was allowing up to 10)
+        max_contracts = self.config.risk.max_contracts
+        quantity = max(1, min(quantity, max_contracts))
+
+        logger.info(
+            f"📏 Position size: {quantity} contracts "
+            f"(${max_risk:.0f} budget / ${contract_cost:.0f} per contract, "
+            f"cap: {max_contracts})"
+        )
+        return quantity
 
     def _execute_entry(self, signal: Signal, option: dict, quantity: int):
         """Execute a trade entry"""
@@ -328,23 +378,51 @@ class TradingEngine:
     # ==================== POSITION MANAGEMENT ====================
 
     def _check_positions(self):
-        """Check all positions for exits, partials, breakeven"""
+        """
+        Check all positions for exits, partials, breakeven.
+        FIX: Batch quote fetch + better logging.
+        """
         if not self.positions.positions:
             return
 
-        # Get current option prices
+        # FIX: Batch fetch all option quotes in ONE API call
         option_symbols = list(self.positions.positions.keys())
         option_quotes = {}
 
-        for opt_sym in option_symbols:
-            quote = self.client.get_option_quote(opt_sym)
-            if quote:
-                bid = float(quote.get("bid", 0) or 0)
-                ask = float(quote.get("ask", 0) or 0)
-                mid = (bid + ask) / 2 if bid > 0 and ask > 0 else 0
-                option_quotes[opt_sym] = mid
+        # Use batch get_quotes instead of individual get_option_quote
+        quotes_data = self.client.get_quotes(option_symbols)
+        if quotes_data:
+            for opt_sym, quote in quotes_data.items():
+                price = quote.get("price", 0)
+                if price <= 0:
+                    # Try mid price
+                    bid = quote.get("bid", 0)
+                    ask = quote.get("ask", 0)
+                    if bid > 0 and ask > 0:
+                        price = (bid + ask) / 2
+                if price > 0:
+                    option_quotes[opt_sym] = price
 
-        # Check positions
+        # FIX: Log what we got
+        if option_symbols:
+            got = len(option_quotes)
+            total = len(option_symbols)
+            if got < total:
+                logger.warning(f"⚠️ Only got {got}/{total} option quotes")
+            
+            # Log each position status
+            for opt_sym in option_symbols:
+                pos = self.positions.positions.get(opt_sym)
+                price = option_quotes.get(opt_sym, 0)
+                if pos and price > 0:
+                    pnl_pct = (price - pos.entry_price) / pos.entry_price if pos.entry_price > 0 else 0
+                    logger.info(
+                        f"📋 {pos.symbol}: entry ${pos.entry_price:.2f} → now ${price:.2f} "
+                        f"| P&L: {pnl_pct:+.1%} | Qty: {pos.quantity} "
+                        f"| T1:{pos.t1_hit} T2:{pos.t2_hit} BE:{pos.breakeven_set}"
+                    )
+
+        # Check positions against prices
         actions = self.positions.check_positions(option_quotes)
 
         for action in actions:

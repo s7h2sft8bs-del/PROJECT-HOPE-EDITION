@@ -1,7 +1,13 @@
 """
-PROJECT HOPE V1 - Configuration
+PROJECT HOPE V1 - Configuration (FIXED)
 All 16 trading protections, watchlist, and settings
 REST polling only - no WebSocket needed
+
+FIXES:
+- Added max_contracts = 5 (hard cap per trade)
+- Added trade_cooldown_sec = 120 (2 min between ANY new trade)
+- Position check interval reduced to 3 sec (was 5)
+- Scan interval increased to 15 sec (was 10) so position checks get priority
 """
 
 import os
@@ -69,6 +75,10 @@ class RiskConfig:
     # Position limits
     max_positions: int = 5                # VIP tier max
     position_size_pct: float = 0.05       # 5% of account per trade
+    max_contracts: int = 5                # FIX: Hard cap contracts per trade
+
+    # Trade spacing
+    trade_cooldown_sec: int = 120         # FIX: 2 min between ANY new trade
 
 
 @dataclass
@@ -87,8 +97,8 @@ class SignalConfig:
     confirmation_checks: int = 3          # 3 checks over 15 sec
     confirmation_interval_sec: int = 5    # 5 sec between checks
     min_rvol: float = 1.5                 # Relative volume minimum
-    scan_interval_sec: int = 10           # Poll every 10 sec
-    position_check_interval_sec: int = 5  # Check positions every 5 sec
+    scan_interval_sec: int = 15           # FIX: Poll every 15 sec (was 10)
+    position_check_interval_sec: int = 3  # FIX: Check positions every 3 sec (was 5)
 
 
 @dataclass
